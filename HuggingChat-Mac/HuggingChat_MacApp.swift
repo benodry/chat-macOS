@@ -14,7 +14,6 @@ import Sparkle
 struct HuggingChat_MacApp: App {
     
     @State var coordinatorModel = CoordinatorModel()
-    @State var hfChatSession = HuggingChatSession()
     
     @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -69,7 +68,7 @@ struct HuggingChat_MacApp: App {
         // Settings
         Settings {
             SettingsView()
-                .environment(hfChatSession)
+                .environment(HuggingChatSession.shared)
                 .environment(appDelegate.themeEngine)
                 .environment(appDelegate.conversationModel)
                 .environment(appDelegate.modelManager)
