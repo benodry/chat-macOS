@@ -103,44 +103,52 @@ struct DetailContent: View {
     
     var body: some View {
         NavigationStack {
-            if !isLocal {
-                ScrollViewReader { proxy in
-                    ScrollView(.vertical) {
-                        LazyVStack(spacing: 15) {
-                            ForEach(conversationModel.messages) { message in
-                                MessageView(message: message)
-                            }
-                        }
-                    }.overlay {
-                        if conversationModel.messages.isEmpty {
-                            ZStack {
-                                Image("huggy")
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .symbolRenderingMode(.none)
-                                    .foregroundStyle(.tertiary)
-                                    .frame(width: 45, height: 45)
-                            }
-                            .frame(maxHeight: .infinity, alignment: .center)
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: 15) {
+                        ForEach(conversationModel.messages) { message in
+                            MessageView(message: message)
                         }
                     }
-                    .contentMargins(.horizontal, 20, for: .scrollContent)
-                    .contentMargins(.top, 10, for: .scrollContent)
-                    .contentMargins(.bottom, -40, for: .scrollContent)
-                    .scrollIndicators(.hidden)
-                    .safeAreaInset(edge: .bottom, content: {
-                        if selectedLocalModel != "None" {
-                            CardStack([
-                                AnyView(localInputView.focused($focusedField, equals: .localInput)), // It physically pains me to do type erasure like this
-                                AnyView(serverInputView.focused($focusedField, equals: .serverInput)),
-                            ], selectedIndex: $cardIndex)
-                            
-                        } else {
-                            serverInputView.focused($focusedField, equals: .serverInput)
+                }.overlay {
+                    if conversationModel.messages.isEmpty {
+                        ZStack {
+                            Image("huggy")
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .symbolRenderingMode(.none)
+                                .foregroundStyle(.tertiary)
+                                .frame(width: 45, height: 45)
                         }
-                    })
-                    .defaultScrollAnchor(.bottom)
+                        .frame(maxHeight: .infinity, alignment: .center)
+                    }
                 }
+                .contentMargins(.horizontal, 20, for: .scrollContent)
+                .contentMargins(.top, 10, for: .scrollContent)
+                .contentMargins(.bottom, 20, for: .scrollContent)
+                .scrollIndicators(.hidden)
+                .safeAreaInset(edge: .bottom, content: {
+                    VStack {
+                        // Text("DEBUG: SAFE AREA INSET IS HERE") // Debug: Comment out debug text
+                        //     .foregroundColor(.white)
+                        //     .font(.headline)
+                        //     .padding()
+                        
+                        Group {
+                            if selectedLocalModel != "None" {
+                                CardStack([
+                                    AnyView(localInputView.focused($focusedField, equals: .localInput)), // It physically pains me to do type erasure like this
+                                    AnyView(serverInputView.focused($focusedField, equals: .serverInput)),
+                                ], selectedIndex: $cardIndex)
+                                
+                            } else {
+                                serverInputView.focused($focusedField, equals: .serverInput)
+                            }
+                        }
+                    }
+                    // .background(Color.blue.opacity(0.8)) // Debug: Blue background for entire safeAreaInset
+                })
+                .defaultScrollAnchor(.bottom)
             }
         }
         // Prevent content from causing layout shifts

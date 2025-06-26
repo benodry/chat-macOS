@@ -119,7 +119,11 @@ squares = [x**2 for x in range(5)]
     
     var body: some View {
         Form {
-            Section(content: {
+            Group {
+                Text("General")
+                    .font(.headline)
+                    .padding(.bottom, 5)
+                
                 LabeledContent("Appearance:", content: {
                     HStack(spacing: 12) {
                         AppearanceButton(title: "Light", isSelected: appearance == .light, icon: Appearance.light.iconName) {
@@ -134,11 +138,13 @@ squares = [x**2 for x in range(5)]
                     }
                     
                 })
-            }, header: {
-                Text("General")
-            })
+            }
             
-            Section(content: {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Code")
+                    .font(.headline)
+                    .padding(.bottom, 5)
+                    
                 // Code Accent color
                 LabeledContent("Inline Highlight:") {
                     HStack(spacing: 8) {
@@ -175,22 +181,22 @@ squares = [x**2 for x in range(5)]
                 
                 DisclosureGroup(isExpanded: $isPreviewExpanded) {
                     
-                    MarkdownView(text: $codeSample)
+                    MarkdownView(codeSample)
                         .font(.system(.body).monospaced().weight(.medium), for: .codeBlock)
                         .tint(inlineCodeHiglight.color, for: .inlineCodeBlock)
-                        .codeHighlighterTheme(CodeHighlighterTheme(lightModeThemeName: lightCodeBlockTheme, darkModeThemeName: darkCodeBlockTheme))
+                        .codeBlockStyle(.default(lightTheme: lightCodeBlockTheme, darkTheme: darkCodeBlockTheme))
                         .padding(.top, 10)
                 } label: {
                     Text("Markdown Preview")
                         .fontWeight(.medium)
                 }
-                
-            }, header: {
-                Text("Code")
-            })
+            }
             
-            
-            Section(content: {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Theme")
+                    .font(.headline)
+                    .padding(.bottom, 5)
+                    
                 ScrollView {
                     HStack(alignment: .top) {
                         ForEach(sortedThemes, id: \.self) { themeName in
@@ -207,9 +213,7 @@ squares = [x**2 for x in range(5)]
                     }
                     .padding()
                 }
-            }, header: {
-                Text("Theme")
-            })
+            }
         }.formStyle(.grouped)
         
     }

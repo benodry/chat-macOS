@@ -35,26 +35,18 @@ struct ResponseView: View {
                         ScrollView {
                             VStack(alignment: .leading) {
                                 if ThemingEngine.shared.currentTheme.markdownFont == nil {
-                                    MarkdownView(text: modelManager.outputText)
+                                    MarkdownView(modelManager.outputText)
                                         .padding(.vertical)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                        .fontGroup(DefaultFontGroup.automatic)
-                                        .markdownRenderingThread(.background)
                                         .tint(inlineCodeHiglight.color, for: .inlineCodeBlock)
-                                        .codeHighlighterTheme(CodeHighlighterTheme(lightModeThemeName: lightCodeBlockTheme, darkModeThemeName: darkCodeBlockTheme))
-                                        .multilineTextAlignment(.leading)
-                                        .textSelection(.enabled)
+                                        .codeBlockStyle(.default(lightTheme: lightCodeBlockTheme, darkTheme: darkCodeBlockTheme))
                                         .id(8)
                                 } else {
-                                    MarkdownView(text: modelManager.outputText)
+                                    MarkdownView(modelManager.outputText)
                                         .padding(.vertical)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                        .markdownRenderingThread(.background)
-                                        .fontGroup(ThemingEngine.shared.currentTheme.markdownFont!)
                                         .tint(inlineCodeHiglight.color, for: .inlineCodeBlock)
-                                        .codeHighlighterTheme(CodeHighlighterTheme(lightModeThemeName: lightCodeBlockTheme, darkModeThemeName: darkCodeBlockTheme))
-                                        .multilineTextAlignment(.leading)
-                                        .textSelection(.enabled)
+                                        .codeBlockStyle(.default(lightTheme: lightCodeBlockTheme, darkTheme: darkCodeBlockTheme))
                                         .id(8)
                                 }
                             }
@@ -89,28 +81,18 @@ struct ResponseView: View {
                         ScrollView {
                             VStack(alignment: .leading) {
                                 if ThemingEngine.shared.currentTheme.markdownFont == nil {
-                                    MarkdownView(text: (conversationModel.imageURL != nil ? "![Generated Image](\(conversationModel.imageURL!))\n\n\n\n": "") + message.content)
-                                        .imageProvider(CustomImageProvider(), forURLScheme: "https")
+                                    MarkdownView((conversationModel.imageURL != nil ? "![Generated Image](\(conversationModel.imageURL!))\n\n\n\n": "") + message.content)
                                         .padding(.vertical)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                        .fontGroup(DefaultFontGroup.automatic)
-                                        .markdownRenderingThread(.background)
                                         .tint(inlineCodeHiglight.color, for: .inlineCodeBlock)
-                                        .codeHighlighterTheme(CodeHighlighterTheme(lightModeThemeName: lightCodeBlockTheme, darkModeThemeName: darkCodeBlockTheme))
-                                        .multilineTextAlignment(.leading)
-                                        .textSelection(.enabled)
+                                        .codeBlockStyle(.default(lightTheme: lightCodeBlockTheme, darkTheme: darkCodeBlockTheme))
                                         .id(8)
                                 } else {
-                                    MarkdownView(text: (conversationModel.imageURL != nil ? "![Generated Image](\(conversationModel.imageURL!))\n\n\n\n": "") + message.content)
-                                        .imageProvider(CustomImageProvider(), forURLScheme: "https")
+                                    MarkdownView((conversationModel.imageURL != nil ? "![Generated Image](\(conversationModel.imageURL!))\n\n\n\n": "") + message.content)
                                         .padding(.vertical)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                        .markdownRenderingThread(.background)
-                                        .fontGroup(ThemingEngine.shared.currentTheme.markdownFont!)
                                         .tint(inlineCodeHiglight.color, for: .inlineCodeBlock)
-                                        .codeHighlighterTheme(CodeHighlighterTheme(lightModeThemeName: lightCodeBlockTheme, darkModeThemeName: darkCodeBlockTheme))
-                                        .multilineTextAlignment(.leading)
-                                        .textSelection(.enabled)
+                                        .codeBlockStyle(.default(lightTheme: lightCodeBlockTheme, darkTheme: darkCodeBlockTheme))
                                         .id(8)
                                 }
                                 

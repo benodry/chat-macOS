@@ -86,7 +86,8 @@ struct InputView: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        // print("🔍 DEBUG: InputView.body is being rendered") // Debug: Comment out debug print
+        return VStack(alignment: .leading, spacing: 4) {
             if showingContext {
                 ContextView(showingContext: $showingContext)
                     .padding(.horizontal, -9)
@@ -102,17 +103,6 @@ struct InputView: View {
             .animation(.smooth(duration: 0.3), value: allAttachments.isEmpty)
             
             ZStack {
-//                if isSecondaryTextFieldVisible {
-//                    TextField("", text: $animatablePrompt, axis: .vertical)
-//                        .font(ThemingEngine.shared.currentTheme.quickBarFont)
-//                        .id("hidden-\(selectedTheme)")
-//                        .textFieldStyle(.plain)
-//                        .font(.title3)
-//                        .lineLimit(4)
-//                        .frame(minHeight: 50, alignment: .top)
-//                        .allowsHitTesting(false)
-//                        .transition(.asymmetric(insertion: .identity, removal: .move(edge: .bottom).combined(with: .opacity)))
-//                }
                 TextField("Ask anything...", text: $prompt, axis: .vertical)
                     .font(ThemingEngine.shared.currentTheme.quickBarFont)
                     .id("main-\(selectedTheme)")
@@ -121,7 +111,8 @@ struct InputView: View {
                     .font(.title3)
                     .lineLimit(4)
                     .frame(minHeight: 50, alignment: .top)
-                    .opacity(isMainTextFieldVisible ? 1:0)
+                    // .opacity(1.0) // Debug: Force visible
+                    // .background(Color.red.opacity(0.3)) // Debug: Red background
                     .onSubmit {
                         if prompt == "Think different." && isAppleClassicUnlocked == false  {
                             isAppleClassicUnlocked = true
@@ -295,12 +286,7 @@ struct InputView: View {
             .frame(height: 20)
             
         }
-        .onChange(of: showingContext) {
-            useContext = showingContext
-            if useContext {
-                conversationModel.fetchContext()
-            }
-        }
+        // .background(Color.yellow.opacity(0.5)) // Debug: Yellow background for entire VStack
         .padding(.horizontal)
     }
     

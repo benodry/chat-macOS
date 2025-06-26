@@ -18,14 +18,7 @@ struct MessageView: View {
     
     var body: some View {
         ZStack(alignment: message.type == .user ? .trailing:.leading) {
-            MarkdownView(text: message.content)
-                .imageProvider(CustomImageProvider(), forURLScheme: "https")
-                .fontGroup(DefaultFontGroup.automatic)
-                .markdownRenderingThread(.background)
-                .tint(inlineCodeHiglight.color, for: .inlineCodeBlock)
-                .codeHighlighterTheme(CodeHighlighterTheme(lightModeThemeName: lightCodeBlockTheme, darkModeThemeName: darkCodeBlockTheme))
-                .multilineTextAlignment(.leading)
-                .textSelection(.enabled)
+            MarkdownView(message.content)
                 .padding(.horizontal, message.type == .user ? 10:0)
                 .padding(.vertical, 8)
                 .background(message.type == .user ? RoundedRectangle(cornerRadius: 20, style: .continuous).fill(.gray.opacity(0.3)):nil)
