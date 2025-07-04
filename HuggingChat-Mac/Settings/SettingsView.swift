@@ -82,6 +82,11 @@ struct SettingsView: View {
                         .environment(audioModelManager)
                         
                 }
+                
+                Tab("MCP", systemImage: "wrench.and.screwdriver") {
+                    MCPView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
             .frame(maxWidth: 500, maxHeight: .infinity)
             .onAppear {

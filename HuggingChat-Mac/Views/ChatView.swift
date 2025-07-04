@@ -66,6 +66,9 @@ struct ChatView: View {
     //    @State var counter: Int = 0
     //    @State var origin: CGPoint = .init(x: 0.5, y: 0.5)
     
+    // Add state for MCP sheet
+    @State private var isMCPViewPresented: Bool = false
+    
     var body: some View {
         ZStack(alignment: .bottom) {
             
@@ -102,6 +105,15 @@ struct ChatView: View {
                     }
                     .buttonStyle(HighlightButtonStyle())
                     .help("New Chat")
+                    
+                    // Button(action: {
+                    //     isMCPViewPresented = true
+                    // }) {
+                    //     Image(systemName: "wrench.and.screwdriver")
+                    //         .foregroundColor(.secondary)
+                    // }
+                    // .buttonStyle(HighlightButtonStyle())
+                    // .help("Model Context Protocol (MCP)")
                 }
                 .padding(.horizontal, 15)
                 .padding(.vertical, 10)

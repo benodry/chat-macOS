@@ -41,6 +41,7 @@ struct InputView: View {
     @AppStorage("useContext") private var useContext: Bool = false
     
     @State private var showingContext: Bool = false
+    @State private var isMCPViewPresented: Bool = false
     
     // File importer
     @State private var showFileImporter = false {
@@ -258,6 +259,17 @@ struct InputView: View {
                     })
                     .buttonStyle(HighlightButtonStyle())
                     .help("Toggle context")
+
+                    Button(action: {
+//                        isMCPViewPresented = true
+                    }) {
+                        Image(systemName: isMCPViewPresented ? "wrench.and.screwdriver.fill" : "wrench.and.screwdriver")
+                            .fontWeight(.semibold)
+                            .imageScale(.medium)
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(HighlightButtonStyle())
+                    .help("Model Context Protocol (MCP)")
                 }
                 
                 
