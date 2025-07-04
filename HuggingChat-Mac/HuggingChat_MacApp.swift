@@ -25,6 +25,19 @@ struct HuggingChat_MacApp: App {
     
     init() {
         updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+        
+        // Initialize storage system
+        initializeStorageSystem()
+    }
+    
+    private func initializeStorageSystem() {
+        // Ensure local user manager is initialized
+        let _ = LocalUserManager.shared
+        
+        // Ensure storage manager is initialized
+        let _ = ConversationStorageManager.shared
+        
+        print("📦 Storage system initialized - Mode: \(LocalUserManager.shared.storageMode.displayName)")
     }
     
     var body: some Scene {

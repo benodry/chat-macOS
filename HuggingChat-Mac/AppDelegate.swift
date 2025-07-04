@@ -49,6 +49,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellable: AnyCancellable?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Inject dependencies into conversation model
+        conversationModel.setModelManager(modelManager)
+        
         createFloatingPanel()
         newEntryPanel.center()
         

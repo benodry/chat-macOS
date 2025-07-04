@@ -29,17 +29,24 @@ struct GroupedConversation: Identifiable {
     var conversations: [String: [Conversation]] = [:]
     
     private var cancellables = [AnyCancellable]()
+    private let storageManager = ConversationStorageManager.shared
     
     var currentConversationId: String = ""
 
     func refreshState() {
-        HuggingChatSession.shared.refreshLoginState()
-        if (HuggingChatSession.shared.currentUser != nil) {
+        // Check authentication based on storage mode
+        if storageManager.storageMode != .local {
+            HuggingChatSession.shared.refreshLoginState()
+        }
+        
+        // Load conversations based on storage capabilities
+        if storageManager.canCreateConversations {
             self.getConversations()
         } else {
             self.conversations = [:]
         }
         
+        // Set current conversation if available
         if let conversation = HuggingChatSession.shared.currentConversation {
             self.currentConversationId = conversation
         }
@@ -95,22 +102,27 @@ struct GroupedConversation: Identifiable {
     }
 
     func getConversations() {
-        NetworkService.getConversations()
-            .receive(on: DispatchQueue.main)
-            .sink { completion in
-            switch completion {
-            case .finished: break
-            case .failure(let error):
-                print(error.localizedDescription)
+        Task {
+            do {
+                let conversations = try await storageManager.loadConversations()
+                let groupedConversations = MenuViewModel.groupConversationsByDates(conversations: conversations)
+                
+                await MainActor.run {
+                    if !groupedConversations.isEmpty {
+                        self.conversations = groupedConversations
+                    }
+                }
+            } catch {
+                print("Error loading conversations: \(error.localizedDescription)")
+                
+                await MainActor.run {
+                    // Clear conversations on error unless it's just auth required
+                    if !storageManager.requiresAuthentication {
+                        self.conversations = [:]
+                    }
+                }
             }
-        } receiveValue: { [weak self] conversations in
-            let conversations = MenuViewModel.groupConversationsByDates(
-                conversations: conversations)
-            if !conversations.isEmpty {
-                self?.conversations = conversations
-            }
-            
-        }.store(in: &cancellables)
+        }
     }
     
     func getConversation(withServerId id: String) -> Conversation? {

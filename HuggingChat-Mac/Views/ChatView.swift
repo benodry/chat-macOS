@@ -106,14 +106,16 @@ struct ChatView: View {
                     .buttonStyle(HighlightButtonStyle())
                     .help("New Chat")
                     
-                    // Button(action: {
-                    //     isMCPViewPresented = true
-                    // }) {
-                    //     Image(systemName: "wrench.and.screwdriver")
-                    //         .foregroundColor(.secondary)
-                    // }
-                    // .buttonStyle(HighlightButtonStyle())
-                    // .help("Model Context Protocol (MCP)")
+                    StorageStatusIndicator()
+                    
+                    Button(action: {
+                        isMCPViewPresented = true
+                    }) {
+                        Image(systemName: "network")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(HighlightButtonStyle())
+                    .help("Model Context Protocol (MCP)")
                 }
                 .padding(.horizontal, 15)
                 .padding(.vertical, 10)
@@ -205,6 +207,10 @@ struct ChatView: View {
                 .stroke(.secondary.opacity(0.5), lineWidth: 1.0)
         })
         .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .sheet(isPresented: $isMCPViewPresented) {
+            MCPView()
+                .frame(minWidth: 700, minHeight: 500)
+        }
         //        .modifier(Shake(animatableData: CGFloat(errorAttempts)))
         //        .padding()
         //        .padding(.horizontal, 10) // Allows for shake animation

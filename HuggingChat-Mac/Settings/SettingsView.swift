@@ -72,20 +72,20 @@ struct SettingsView: View {
                         
                 }
                 
-//                Tab("Advanced", systemImage: "wrench.and.screwdriver") {
-//                    AdvancedSettings()
-//                }
+                Tab("Storage", systemImage: "externaldrive") {
+                    StorageSettingsView()
+                }
+                
+                Tab("MCP", systemImage: "network") {
+                    MCPView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
                 
                 Tab("Components", systemImage: "square.3.layers.3d") {
                     ComponentsSettingsView()
                         .environment(modelManager)
                         .environment(audioModelManager)
                         
-                }
-                
-                Tab("MCP", systemImage: "wrench.and.screwdriver") {
-                    MCPView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .frame(maxWidth: 500, maxHeight: .infinity)
@@ -117,6 +117,16 @@ struct SettingsView: View {
                     
                     .tabItem {
                         Label("Appearance", systemImage: "paintbrush")
+                    }
+                
+                StorageSettingsView()
+                    .tabItem {
+                        Label("Storage", systemImage: "externaldrive")
+                    }
+                
+                MCPView()
+                    .tabItem {
+                        Label("MCP", systemImage: "network")
                     }
                 
                 ComponentsSettingsView()

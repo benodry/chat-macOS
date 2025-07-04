@@ -279,8 +279,9 @@ struct InputView: View {
                     AudioBarView()
                     
                 } else {
-                    let externalModelName = selectedExternalModel.split(separator: "/", maxSplits: 1)[1]
-                    Label(isLocal ? selectedLocalModel:String(externalModelName), systemImage: isLocal ? "laptopcomputer":"globe")
+                    let externalModelName = selectedExternalModel.split(separator: "/", maxSplits: 1)
+                    let displayName = externalModelName.count > 1 ? String(externalModelName[1]) : selectedExternalModel
+                    Label(isLocal ? selectedLocalModel : displayName, systemImage: isLocal ? "laptopcomputer":"globe")
                         .foregroundStyle(.gray.opacity(0.5))
                         .font(.footnote)
                         .fontWeight(.semibold)
@@ -421,16 +422,12 @@ struct InputView: View {
         //                }.joined(separator: "\n\n")
         //            }
         //        }
-        if isLocal {
-            let localPrompt = prompt
-            Task {
-                await modelManager.generate(prompt: localPrompt)
-            }
-        } else {
-            let attachmentURLs = allAttachments
-                .compactMap { $0.url?.path } // Unwrap optional URLs and convert to String paths
-            conversationModel.sendAttributed(text: prompt, withFiles: attachmentURLs)
-        }
+        
+        // Always go through ConversationViewModel - it will handle local vs remote routing
+        let attachmentURLs = allAttachments
+            .compactMap { $0.url?.path } // Unwrap optional URLs and convert to String paths
+        conversationModel.sendAttributed(text: prompt, withFiles: attachmentURLs)
+        
         allAttachments = []
         prompt = ""
         withAnimation(.easeIn(duration: 0.2)) {

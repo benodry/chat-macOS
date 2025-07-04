@@ -51,6 +51,35 @@ enum ConversationState: Equatable {
     var contextAppIcon: NSImage?
     var contextIsSupported: Bool = false
     
+    // Local model support
+    var selectedLocalModel: String {
+        get {
+            access(keyPath: \.selectedLocalModel)
+            return UserDefaults.standard.string(forKey: "localModel") ?? "None"
+        }
+        set {
+            withMutation(keyPath: \.selectedLocalModel) {
+                UserDefaults.standard.setValue(newValue, forKey: "localModel")
+            }
+        }
+    }
+    
+    var isLocalGeneration: Bool {
+        get {
+            access(keyPath: \.isLocalGeneration)
+            return UserDefaults.standard.bool(forKey: "isLocalGeneration")
+        }
+        set {
+            withMutation(keyPath: \.isLocalGeneration) {
+                UserDefaults.standard.setValue(newValue, forKey: "isLocalGeneration")
+                // When local generation changes, update storage mode accordingly
+                if newValue {
+                    storageManager.storageMode = .local
+                }
+            }
+        }
+    }
+    
     // Currently the best way to get @AppStorage value while returning observability
     var useWebService: Bool {
         get {
@@ -90,11 +119,18 @@ enum ConversationState: Equatable {
 
     private var cancellables = [AnyCancellable]()
     private var sendPromptHandler: SendPromptHandler?
+    private let storageManager = ConversationStorageManager.shared
+    
+    // We'll need to inject ModelManager through the environment
+    private var modelManager: ModelManager?
     
     private(set) var conversation: Conversation? {
         didSet {
             guard let conversation = conversation else { return }
-            HuggingChatSession.shared.currentConversation = conversation.serverId
+            // Only set HF session if using HuggingFace storage
+            if storageManager.storageMode != .local {
+                HuggingChatSession.shared.currentConversation = conversation.serverId
+            }
         }
     }
     
@@ -102,7 +138,10 @@ enum ConversationState: Equatable {
     
     func loadConversation(_ conversation: Conversation) {
         self.conversation = conversation
-        HuggingChatSession.shared.currentConversation = conversation.serverId
+        // Only set HF session if using HuggingFace storage
+        if storageManager.storageMode != .local {
+            HuggingChatSession.shared.currentConversation = conversation.serverId
+        }
         loadHistory()
     }
     
@@ -110,50 +149,85 @@ enum ConversationState: Equatable {
         guard let conversation = conversation else { return }
         state = .loading
         
-        NetworkService.getConversation(id: conversation.serverId)
-            .receive(on: DispatchQueue.main)
-            .map { [weak self] (conversation: Conversation) -> [MessageRow] in
-                guard let self else { return [] }
-                self.conversation = conversation
-                return self.buildHistory(conversation: conversation)
-            }
-            .sink { completion in
-                switch completion {
-                case .finished: break
-                case .failure(let error):
-                    print("Error loading conversation: \(error.localizedDescription)")
+        Task {
+            do {
+                let loadedConversation = try await storageManager.loadConversation(id: conversation.serverId)
+                
+                await MainActor.run {
+                    self.conversation = loadedConversation
+                    self.messages = self.buildHistory(conversation: loadedConversation)
+                    self.state = .loaded
                 }
-            } receiveValue: { [weak self] messages in
-                self?.messages = messages
-//                self?.internalDelegate?.reloadData()
-//                self?.internalDelegate?.scrollToBottom(animated: false)
-                self?.state = .loaded
-            }.store(in: &cancellables)
+            } catch {
+                await MainActor.run {
+                    print("Error loading conversation: \(error.localizedDescription)")
+                    self.state = .error
+                    self.error = .verbose("Failed to load conversation")
+                }
+            }
+        }
     }
     
     private func createConversationAndSendPrompt(_ prompt: String, withFiles: [String]? = nil, usingTools: [String]? = nil) {
+        // Ensure we have the correct model based on local generation setting
+        if model == nil {
+            getActiveModel()
+        }
+        
+        // For local generation mode, ensure we're using a local model
+        if isLocalGeneration {
+            // Ensure storage mode is local
+            if storageManager.storageMode != .local {
+                storageManager.storageMode = .local
+            }
+            
+            guard selectedLocalModel != "None" else {
+                state = .error
+                error = .verbose("Please select a local model in Settings to create conversations.")
+                return
+            }
+            
+            // Ensure we have a local model loaded
+            if model == nil || !(model is LLMModel) {
+                getLocalModel()
+            }
+        }
+        
         if let model = model as? LLMModel {
             createConversation(with: model, prompt: prompt, withFiles: withFiles, usingTools: usingTools)
+        } else {
+            state = .error
+            error = .verbose("No suitable model available. Please check your settings.")
         }
     }
     
     private func createConversation(with model: LLMModel, prompt: String, withFiles: [String]? = nil, usingTools: [String]? = nil) {
         state = .loaded
-        NetworkService.createConversation(base: model)
-            .receive(on: DispatchQueue.main).sink { completion in
-                switch completion {
-                case .finished:
-                    print("ConversationViewModel.createConversation finished")
-                case .failure(let error):
+        
+        Task {
+            do {
+                let conversation = try await storageManager.createConversation(
+                    title: String(prompt.prefix(50)), // Use first 50 chars as title
+                    model: model
+                )
+                
+                await MainActor.run {
+                    self.conversation = conversation
+                    self.sendAttributed(text: prompt, withFiles: withFiles)
+                }
+            } catch {
+                await MainActor.run {
                     print("ConversationViewModel.createConversation failed:\n\(error)")
                     self.state = .error
-                    self.error = .verbose("Something's wrong. Check your internet connection and try again.")
+                    
+                    if storageManager.requiresAuthentication {
+                        self.error = .verbose("Please log in to create conversations.")
+                    } else {
+                        self.error = .verbose("Failed to create conversation. Please try again.")
+                    }
                 }
-            } receiveValue: { [weak self] conversation in
-                print("Recieved")
-                self?.conversation = conversation
-                self?.sendAttributed(text: prompt, withFiles: withFiles)
-            }.store(in: &cancellables)
+            }
+        }
     }
     
     func sendAttributed(text: String, withFiles: [String]? = nil) {
@@ -193,6 +267,52 @@ enum ConversationState: Equatable {
     }
     
     private func sendPromptRequest(req: PromptRequestBody, conversationID: String) {
+        // Check if we should use local generation
+        if isLocalGeneration {
+            sendLocalPromptRequest(prompt: req.inputs ?? "", conversationID: conversationID)
+        } else {
+            sendRemotePromptRequest(req: req, conversationID: conversationID)
+        }
+    }
+    
+    private func sendLocalPromptRequest(prompt: String, conversationID: String) {
+        state = .generating
+        isInteracting = true
+        imageURL = nil
+        
+        // Create assistant message placeholder
+        let messageRow = MessageRow(type: .assistant, isInteracting: true, contentType: .rawText(""))
+        messages.append(messageRow)
+        
+        guard let modelManager = getModelManager() else {
+            state = .error
+            error = .verbose("Model manager not available.")
+            return
+        }
+        
+        Task {
+            // Generate response using local model
+            await modelManager.generate(prompt: prompt)
+            
+            // Wait for generation to complete and update UI
+            await MainActor.run {
+                // Update the assistant message with the generated content
+                if let lastIndex = self.messages.lastIndex(where: { $0.type == .assistant && $0.isInteracting }) {
+                    let updatedMessage = MessageRow(
+                        type: .assistant,
+                        isInteracting: false,
+                        contentType: .rawText(modelManager.outputText)
+                    )
+                    self.messages[lastIndex] = updatedMessage
+                }
+                
+                // Complete the interaction
+                self.completeInteration()
+            }
+        }
+    }
+    
+    private func sendRemotePromptRequest(req: PromptRequestBody, conversationID: String) {
         state = .generating
         isInteracting = true
         imageURL = nil
@@ -269,13 +389,76 @@ enum ConversationState: Equatable {
     }
     
     func getActiveModel() {
+        // Priority: isLocalGeneration setting overrides storage mode
+        if isLocalGeneration {
+            // Force local mode when local generation is enabled
+            if storageManager.storageMode != .local {
+                storageManager.storageMode = .local
+            }
+            getLocalModel()
+        } else {
+            // Use storage mode to determine model source
+            switch storageManager.storageMode {
+            case .local:
+                getLocalModel()
+                
+            case .huggingface, .hybrid:
+                getHuggingFaceModel()
+            }
+        }
+    }
+    
+    private func getLocalModel() {
+        guard selectedLocalModel != "None" else {
+            self.state = .error
+            self.error = .verbose("Please select a local model in Settings.")
+            return
+        }
+        
+        // Find the local model from ModelManager
+        guard let modelManager = getModelManager() else {
+            self.state = .error
+            self.error = .verbose("Model manager not available. Please restart the application.")
+            return
+        }
+        
+        guard let localModel = modelManager.availableModels.first(where: { $0.displayName == selectedLocalModel }) else {
+            self.state = .error
+            self.error = .verbose("Selected local model '\(selectedLocalModel)' not found.")
+            return
+        }
+        
+        guard localModel.downloadState == .downloaded else {
+            self.state = .error
+            self.error = .verbose("Local model '\(selectedLocalModel)' is not downloaded.")
+            return
+        }
+        
+        // Create a pseudo LLMModel for local model compatibility
+        let localLLMModel = createLocalLLMModel(from: localModel)
+        
+        DispatchQueue.main.async {
+            self.model = localLLMModel
+            self.externalModel = localLLMModel.name
+            self.isMultimodal = localLLMModel.multimodal
+            self.isTools = localLLMModel.tools
+        }
+    }
+    
+    private func getHuggingFaceModel() {
         DataService.shared.getActiveModel().receive(on: DispatchQueue.main).sink { completion in
             switch completion {
             case .finished:
                 print("ConversationViewModel.getActiveModel finished")
             case .failure(let error):
                 self.state = .error
-                self.error = .verbose("Hmm, that didn't go as planned. Please check your connection and try again.")
+                if self.storageManager.storageMode == .huggingface {
+                    self.error = .verbose("Please log in to use HuggingFace models.")
+                } else {
+                    self.error = .verbose("Failed to get HuggingFace model. Using local mode only.")
+                    // Fallback to local model in hybrid mode
+                    self.getLocalModel()
+                }
                 print("ConversationViewModel.getActiveModel failed:\n \(error)")
             }
         } receiveValue: { [weak self] model in
@@ -283,8 +466,25 @@ enum ConversationState: Equatable {
             self?.externalModel = (model as! LLMModel).name
             self?.isMultimodal = (model as! LLMModel).multimodal
             self?.isTools = (model as! LLMModel).tools
-            
         }.store(in: &cancellables)
+    }
+    
+    private func createLocalLLMModel(from localModel: LocalModel) -> LLMModel {
+        // Create a pseudo LLMModel that represents the local model
+        return LLMModel(
+            id: localModel.id,
+            name: localModel.displayName,
+            displayName: localModel.displayName,
+            websiteUrl: URL(string: localModel.hfURL ?? "https://huggingface.co/\(localModel.displayName)")!,
+            modelUrl: URL(string: localModel.hfURL ?? "https://huggingface.co/\(localModel.displayName)")!,
+            promptExamples: [],
+            multimodal: false, // Local models typically don't support multimodal
+            unlisted: false,
+            description: "Local LLM Model",
+            isActive: true,
+            preprompt: "",
+            tools: false // Local models typically don't support tools
+        )
     }
     
     private func buildHistory(conversation: Conversation) -> [MessageRow] {
@@ -353,4 +553,18 @@ enum ConversationState: Equatable {
         contextAppFullText = nil
     }
     
+}
+
+// MARK: - Environment Setup
+    
+extension ConversationViewModel {
+    func setModelManager(_ modelManager: ModelManager) {
+        self.modelManager = modelManager
+    }
+    
+    private func getModelManager() -> ModelManager? {
+        return modelManager
+    }
+    
+    // MARK: - Conversation Management
 }
