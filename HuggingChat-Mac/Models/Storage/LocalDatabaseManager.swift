@@ -81,6 +81,14 @@ class LocalDatabaseManager: ConversationStorageProtocol {
             );
         """
         
+        let createSettingsTable = """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
+        """
+        
         let createIndexes = """
             CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
             CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at);
@@ -90,7 +98,11 @@ class LocalDatabaseManager: ConversationStorageProtocol {
         
         executeSQL(createConversationsTable)
         executeSQL(createMessagesTable)
+        executeSQL(createSettingsTable)
         executeSQL(createIndexes)
+        
+        // Initialize default settings
+        initializeDefaultSettings()
         
         print("✅ Local database tables created successfully")
     }
@@ -114,6 +126,7 @@ class LocalDatabaseManager: ConversationStorageProtocol {
     // MARK: - ConversationStorageProtocol Implementation
     
     func createConversation(title: String, model: LLMModel) async throws -> Conversation {
+        print("🔧 LocalDatabaseManager.createConversation called with title: '\(title)', model: \(model.id)")
         return try await withCheckedThrowingContinuation { continuation in
             dbQueue.async {
                 do {
@@ -122,53 +135,86 @@ class LocalDatabaseManager: ConversationStorageProtocol {
                         return
                     }
                     
-                    let conversationId = UUID().uuidString
                     let userId = LocalUserManager.shared.currentLocalUser?.id.uuidString ?? "default"
                     let now = Date()
                     
-                    let sql = """
-                        INSERT INTO conversations (id, user_id, title, created_at, updated_at, model_name) 
-                        VALUES (?, ?, ?, ?, ?, ?);
-                    """
+                    // Retry logic for UUID conflicts
+                    var retryCount = 0
+                    let maxRetries = 3
                     
-                    var statement: OpaquePointer?
-                    defer { 
-                        if statement != nil {
-                            sqlite3_finalize(statement) 
+                    while retryCount < maxRetries {
+                        let conversationId = UUID().uuidString
+                        
+                        let sql = """
+                            INSERT INTO conversations (id, user_id, title, created_at, updated_at, model_name) 
+                            VALUES (?, ?, ?, ?, ?, ?);
+                        """
+                        
+                        var statement: OpaquePointer?
+                        defer { 
+                            if statement != nil {
+                                sqlite3_finalize(statement) 
+                            }
+                        }
+                        
+                        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+                            let errorMessage = String(cString: sqlite3_errmsg(db))
+                            print("❌ Failed to prepare create conversation statement: \(errorMessage)")
+                            continuation.resume(throwing: StorageError.databaseCorrupted)
+                            return
+                        }
+                        
+                        print("🔧 Binding values - ID: '\(conversationId)', UserID: '\(userId)', Title: '\(title)', ModelID: '\(model.id)'")
+                        
+                        sqlite3_bind_text(statement, 1, conversationId, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                        sqlite3_bind_text(statement, 2, userId, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                        sqlite3_bind_text(statement, 3, title, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                        sqlite3_bind_double(statement, 4, now.timeIntervalSince1970)
+                        sqlite3_bind_double(statement, 5, now.timeIntervalSince1970)
+                        sqlite3_bind_text(statement, 6, model.id, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                        
+                        let stepResult = sqlite3_step(statement)
+                        if stepResult == SQLITE_DONE {
+                            // Success! Create and return conversation object
+                            let conversation = Conversation(
+                                serverId: conversationId, // Use local ID as server ID for consistency
+                                title: title,
+                                modelId: model.id,
+                                updatedAt: now,
+                                messages: [],
+                                areMessagesLoaded: true
+                            )
+                            
+                            print("✅ Created local conversation: \(title) (\(conversationId))")
+                            continuation.resume(returning: conversation)
+                            return
+                        } else {
+                            let errorMessage = String(cString: sqlite3_errmsg(db))
+                            
+                            // Check if it's a UNIQUE constraint violation
+                            if errorMessage.contains("UNIQUE constraint failed") {
+                                retryCount += 1
+                                print("⚠️ UUID collision detected (attempt \(retryCount)/\(maxRetries)): \(conversationId)")
+                                
+                                if retryCount < maxRetries {
+                                    // Clean up this statement and try again
+                                    sqlite3_finalize(statement)
+                                    statement = nil
+                                    continue
+                                }
+                            }
+                            
+                            // If it's not a UUID collision or we've exceeded retries, fail
+                            print("❌ Failed to insert conversation: \(errorMessage)")
+                            print("❌ SQL: \(sql)")
+                            print("❌ ConversationId: \(conversationId)")
+                            print("❌ UserId: \(userId)")
+                            print("❌ Title: \(title)")
+                            print("❌ ModelId: \(model.id)")
+                            continuation.resume(throwing: StorageError.invalidData)
+                            return
                         }
                     }
-                    
-                    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
-                        let errorMessage = String(cString: sqlite3_errmsg(db))
-                        print("❌ Failed to prepare create conversation statement: \(errorMessage)")
-                        continuation.resume(throwing: StorageError.databaseCorrupted)
-                        return
-                    }
-                    
-                    sqlite3_bind_text(statement, 1, conversationId, -1, nil)
-                    sqlite3_bind_text(statement, 2, userId, -1, nil)
-                    sqlite3_bind_text(statement, 3, title, -1, nil)
-                    sqlite3_bind_double(statement, 4, now.timeIntervalSince1970)
-                    sqlite3_bind_double(statement, 5, now.timeIntervalSince1970)
-                    sqlite3_bind_text(statement, 6, model.id, -1, nil)
-                    
-                    guard sqlite3_step(statement) == SQLITE_DONE else {
-                        continuation.resume(throwing: StorageError.invalidData)
-                        return
-                    }
-                    
-                    // Create and return conversation object
-                    let conversation = Conversation(
-                        serverId: conversationId, // Use local ID as server ID for consistency
-                        title: title,
-                        modelId: model.id,
-                        updatedAt: now,
-                        messages: [],
-                        areMessagesLoaded: true
-                    )
-                    
-                    print("✅ Created local conversation: \(title) (\(conversationId))")
-                    continuation.resume(returning: conversation)
                 } catch {
                     continuation.resume(throwing: error)
                 }
@@ -225,7 +271,7 @@ class LocalDatabaseManager: ConversationStorageProtocol {
                         return
                     }
                     
-                    sqlite3_bind_text(statement, 1, userId, -1, nil)
+                    sqlite3_bind_text(statement, 1, userId, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
                     
                     var conversations: [Conversation] = []
                     
@@ -295,7 +341,7 @@ class LocalDatabaseManager: ConversationStorageProtocol {
                         return
                     }
                     
-                    sqlite3_bind_text(statement, 1, id, -1, nil)
+                    sqlite3_bind_text(statement, 1, id, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
                     
                     guard sqlite3_step(statement) == SQLITE_ROW else {
                         continuation.resume(throwing: StorageError.conversationNotFound)
@@ -378,7 +424,7 @@ class LocalDatabaseManager: ConversationStorageProtocol {
             throw StorageError.invalidData
         }
         
-        sqlite3_bind_text(statement, 1, conversationId, -1, nil)
+        sqlite3_bind_text(statement, 1, conversationId, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         
         var messages: [Message] = []
         
@@ -438,10 +484,10 @@ class LocalDatabaseManager: ConversationStorageProtocol {
                         return
                     }
                     
-                    sqlite3_bind_text(statement, 1, messageId, -1, nil)
-                    sqlite3_bind_text(statement, 2, conversationId, -1, nil)
+                    sqlite3_bind_text(statement, 1, messageId, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                    sqlite3_bind_text(statement, 2, conversationId, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
                     sqlite3_bind_int(statement, 3, Int32(typeValue))
-                    sqlite3_bind_text(statement, 4, content, -1, nil)
+                    sqlite3_bind_text(statement, 4, content, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
                     sqlite3_bind_double(statement, 5, timestamp.timeIntervalSince1970)
                     
                     guard sqlite3_step(statement) == SQLITE_DONE else {
@@ -494,7 +540,7 @@ class LocalDatabaseManager: ConversationStorageProtocol {
         }
         
         sqlite3_bind_double(statement, 1, Date().timeIntervalSince1970)
-        sqlite3_bind_text(statement, 2, conversationId, -1, nil)
+        sqlite3_bind_text(statement, 2, conversationId, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw StorageError.invalidData
@@ -524,7 +570,7 @@ class LocalDatabaseManager: ConversationStorageProtocol {
                         return
                     }
                     
-                    sqlite3_bind_text(statement, 1, id, -1, nil)
+                    sqlite3_bind_text(statement, 1, id, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
                     
                     guard sqlite3_step(statement) == SQLITE_DONE else {
                         continuation.resume(throwing: StorageError.conversationNotFound)
@@ -567,9 +613,9 @@ class LocalDatabaseManager: ConversationStorageProtocol {
                         return
                     }
                     
-                    sqlite3_bind_text(statement, 1, title, -1, nil)
+                    sqlite3_bind_text(statement, 1, title, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
                     sqlite3_bind_double(statement, 2, Date().timeIntervalSince1970)
-                    sqlite3_bind_text(statement, 3, id, -1, nil)
+                    sqlite3_bind_text(statement, 3, id, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
                     
                     guard sqlite3_step(statement) == SQLITE_DONE else {
                         continuation.resume(throwing: StorageError.conversationNotFound)
@@ -585,6 +631,163 @@ class LocalDatabaseManager: ConversationStorageProtocol {
         }
     }
     
+    // MARK: - Settings Management
+    
+    private func initializeDefaultSettings() {
+        // Sync key settings from UserDefaults to database
+        syncSettingFromUserDefaults("isLocalGeneration")
+        syncSettingFromUserDefaults("selectedLocalModel") 
+        syncSettingFromUserDefaults("storageMode")
+    }
+    
+    private func syncSettingFromUserDefaults(_ key: String) {
+        dbQueue.async {
+            do {
+                guard let db = self.db else { return }
+                
+                // Get value from UserDefaults
+                let userDefaultsValue: String
+                switch key {
+                case "isLocalGeneration":
+                    userDefaultsValue = String(UserDefaults.standard.bool(forKey: key))
+                case "selectedLocalModel":
+                    userDefaultsValue = UserDefaults.standard.string(forKey: "localModel") ?? "None"
+                case "storageMode":
+                    userDefaultsValue = UserDefaults.standard.string(forKey: key) ?? "hybrid"
+                default:
+                    userDefaultsValue = UserDefaults.standard.string(forKey: key) ?? ""
+                }
+                
+                // Insert or update in database
+                let sql = """
+                    INSERT OR REPLACE INTO settings (key, value, updated_at) 
+                    VALUES (?, ?, ?);
+                """
+                
+                var statement: OpaquePointer?
+                defer { 
+                    if statement != nil {
+                        sqlite3_finalize(statement) 
+                    }
+                }
+                
+                guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+                    print("❌ Failed to prepare settings sync statement for \(key)")
+                    return
+                }
+                
+                sqlite3_bind_text(statement, 1, key, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                sqlite3_bind_text(statement, 2, userDefaultsValue, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
+                
+                if sqlite3_step(statement) == SQLITE_DONE {
+                    print("✅ Synced setting \(key) = \(userDefaultsValue) to database")
+                } else {
+                    print("❌ Failed to sync setting \(key) to database")
+                }
+            }
+        }
+    }
+    
+    func updateSetting(key: String, value: String) async throws {
+        return try await withCheckedThrowingContinuation { continuation in
+            dbQueue.async {
+                do {
+                    guard let db = self.db else {
+                        continuation.resume(throwing: StorageError.localStorageUnavailable)
+                        return
+                    }
+                    
+                    let sql = """
+                        INSERT OR REPLACE INTO settings (key, value, updated_at) 
+                        VALUES (?, ?, ?);
+                    """
+                    
+                    var statement: OpaquePointer?
+                    defer { 
+                        if statement != nil {
+                            sqlite3_finalize(statement) 
+                        }
+                    }
+                    
+                    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+                        continuation.resume(throwing: StorageError.invalidData)
+                        return
+                    }
+                    
+                    sqlite3_bind_text(statement, 1, key, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                    sqlite3_bind_text(statement, 2, value, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                    sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
+                    
+                    guard sqlite3_step(statement) == SQLITE_DONE else {
+                        continuation.resume(throwing: StorageError.invalidData)
+                        return
+                    }
+                    
+                    // Also update UserDefaults to keep them in sync
+                    DispatchQueue.main.async {
+                        switch key {
+                        case "isLocalGeneration":
+                            UserDefaults.standard.set(value.lowercased() == "true", forKey: key)
+                        case "selectedLocalModel":
+                            UserDefaults.standard.set(value, forKey: "localModel")
+                        default:
+                            UserDefaults.standard.set(value, forKey: key)
+                        }
+                        UserDefaults.standard.synchronize()
+                    }
+                    
+                    print("🔧 Updated setting: \(key) = \(value)")
+                    continuation.resume(returning: ())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+    
+    func getSetting(key: String) async throws -> String? {
+        return try await withCheckedThrowingContinuation { continuation in
+            dbQueue.async {
+                do {
+                    guard let db = self.db else {
+                        continuation.resume(throwing: StorageError.localStorageUnavailable)
+                        return
+                    }
+                    
+                    let sql = "SELECT value FROM settings WHERE key = ?;"
+                    
+                    var statement: OpaquePointer?
+                    defer { 
+                        if statement != nil {
+                            sqlite3_finalize(statement) 
+                        }
+                    }
+                    
+                    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+                        continuation.resume(throwing: StorageError.invalidData)
+                        return
+                    }
+                    
+                    sqlite3_bind_text(statement, 1, key, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+                    
+                    if sqlite3_step(statement) == SQLITE_ROW {
+                        if let valuePtr = sqlite3_column_text(statement, 0) {
+                            let value = String(cString: valuePtr)
+                            continuation.resume(returning: value)
+                        } else {
+                            continuation.resume(returning: nil)
+                        }
+                    } else {
+                        continuation.resume(returning: nil)
+                    }
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     // MARK: - Database Health Check
     
     private func isDatabaseHealthy() -> Bool {
@@ -615,5 +818,22 @@ class LocalDatabaseManager: ConversationStorageProtocol {
             print("❌ Database health check failed with result: \(result)")
             return false
         }
+    }
+    
+    // MARK: - Local Generation Management
+    
+    func enableLocalGenerationForModel(_ modelName: String) async throws {
+        // Update both settings atomically
+        try await updateSetting(key: "selectedLocalModel", value: modelName)
+        try await updateSetting(key: "isLocalGeneration", value: "true")
+        
+        print("🤖 Enabled local generation for model: \(modelName)")
+    }
+    
+    func disableLocalGeneration() async throws {
+        try await updateSetting(key: "selectedLocalModel", value: "None")
+        try await updateSetting(key: "isLocalGeneration", value: "false")
+        
+        print("🚫 Disabled local generation")
     }
 }

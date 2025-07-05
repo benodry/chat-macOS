@@ -127,6 +127,7 @@ struct GeneralSettingsView: View {
                             isLocalGeneration = false
                             modelManager.cancelLoading()
                         } else if let selectedLocalModel = modelManager.availableModels.first(where: { $0.displayName == selectedLocalModel }) {
+                            isLocalGeneration = true
                             Task {
                                 await modelManager.localModelDidChange(to: selectedLocalModel)
                             }

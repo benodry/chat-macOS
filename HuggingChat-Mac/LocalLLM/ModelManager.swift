@@ -233,23 +233,37 @@ enum ModelType: Equatable {
     
     // MARK: - Generate Text
     func generate(prompt: String) async {
-            guard !running else { return }
-            guard globalContainer != nil else { return }
-            guard globalConfig != nil else { return }
+        print("🤖 ModelManager.generate called with prompt: '\(prompt.prefix(50))...'")
+        
+        guard !running else { 
+            print("❌ Already running, skipping generation")
+            return 
+        }
+        guard globalContainer != nil else { 
+            print("❌ No globalContainer loaded, cannot generate")
+            return 
+        }
+        guard globalConfig != nil else { 
+            print("❌ No globalConfig available, cannot generate")
+            return 
+        }
 
-            running = true
-            self.outputText = ""
+        print("✅ Starting local text generation...")
+        running = true
+        self.outputText = ""
 
-            do {
-                messages.append(["role": "user", "content": prompt])
-                let promptTokens = try await globalContainer!.perform { _, tokenizer in
-                    try tokenizer.applyChatTemplate(messages: messages)
-                }
+        do {
+            messages.append(["role": "user", "content": prompt])
+            print("🔧 Applying chat template...")
+            let promptTokens = try await globalContainer!.perform { _, tokenizer in
+                try tokenizer.applyChatTemplate(messages: messages)
+            }
 
-                MLXRandom.seed(UInt64(Date.timeIntervalSinceReferenceDate * 1000))
+            MLXRandom.seed(UInt64(Date.timeIntervalSinceReferenceDate * 1000))
 
-                let result = await globalContainer!.perform { model, tokenizer in
-                    MLXLLM.generate(
+            print("🔧 Generating tokens...")
+            let result = await globalContainer!.perform { model, tokenizer in
+                MLXLLM.generate(
                         promptTokens: promptTokens, parameters: generateParameters, model: model,
                         tokenizer: tokenizer, extraEOSTokens: globalConfig!.extraEOSTokens
                     ) { tokens in

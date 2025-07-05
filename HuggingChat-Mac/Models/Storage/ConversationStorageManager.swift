@@ -16,6 +16,8 @@ import SwiftUI
     
     private var currentStorage: ConversationStorageProtocol
     private let localUserManager = LocalUserManager.shared
+    private var isCreatingConversation = false
+    private let creationQueue = DispatchQueue(label: "com.huggingchat.conversation.creation", qos: .userInitiated)
     
     var storageMode: StorageMode {
         get { localUserManager.storageMode }
@@ -41,7 +43,25 @@ import SwiftUI
     // MARK: - Public API
     
     func createConversation(title: String, model: LLMModel) async throws -> Conversation {
-        return try await currentStorage.createConversation(title: title, model: model)
+        // Ensure that only one conversation can be created at a time
+        if isCreatingConversation {
+            print("⚠️ Conversation creation already in progress, rejecting duplicate request")
+            throw StorageError.invalidData
+        }
+        
+        isCreatingConversation = true
+        
+        defer {
+            // Allow new conversation creations after the current one is finished
+            isCreatingConversation = false
+        }
+        
+        let conversation = try await currentStorage.createConversation(title: title, model: model)
+        
+        // Post notification that a new conversation was created
+        NotificationCenter.default.post(name: .conversationCreated, object: conversation)
+        
+        return conversation
     }
     
     func loadConversations() async throws -> [Conversation] {
@@ -97,4 +117,9 @@ import SwiftUI
             }
         }
     }
+}
+
+// MARK: - Notification Extensions
+extension Notification.Name {
+    static let conversationCreated = Notification.Name("conversationCreated")
 }

@@ -38,7 +38,6 @@ struct SidebarContent: View {
         }
         .listStyle(.sidebar)
         .task {
-            menuModel.getConversations()
             menuModel.refreshState()
         }
     }

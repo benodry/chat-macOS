@@ -231,10 +231,16 @@ enum ConversationState: Equatable {
     }
     
     func sendAttributed(text: String, withFiles: [String]? = nil) {
-        guard let conversation = conversation, let previousId = conversation.messages.last?.id else {
+        // If no conversation exists, create one first
+        guard let conversation = conversation else {
             createConversationAndSendPrompt(text, withFiles: withFiles, usingTools: isTools ? []:nil)
             return
         }
+        
+        // We have a conversation, so send the message to it
+        // previousId is nil for the first message in a conversation
+        let previousId = conversation.messages.last?.id
+        
         var trimmedText = ""
         if useContext {
             if let contextAppSelectedText = contextAppSelectedText {
@@ -257,10 +263,16 @@ enum ConversationState: Equatable {
     }
     
     func sendTranscript(text: String) {
-        guard let conversation = conversation, let previousId = conversation.messages.last?.id else {
+        // If no conversation exists, create one first
+        guard let conversation = conversation else {
             createConversationAndSendPrompt(text, withFiles: nil, usingTools: nil)
             return
         }
+        
+        // We have a conversation, so send the message to it
+        // previousId is nil for the first message in a conversation
+        let previousId = conversation.messages.last?.id
+        
         let trimmedText = text.trimmingCharacters(in: .whitespaces)
         let req = PromptRequestBody(id: previousId, inputs: trimmedText, webSearch: useWebService, files: nil, tools: nil)
         sendPromptRequest(req: req, conversationID: conversation.serverId)
@@ -290,18 +302,43 @@ enum ConversationState: Equatable {
             return
         }
         
+        // Check if local model is loaded, if not try to get/load it first
+        if case .idle = modelManager.loadState {
+            print("🔧 Local model not loaded, attempting to load...")
+            getLocalModel()
+            
+            // Wait a moment for the model to load
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.sendLocalPromptRequest(prompt: prompt, conversationID: conversationID)
+            }
+            return
+        }
+        
+        // Ensure model is loaded before generating
+        guard case .loaded(_) = modelManager.loadState else {
+            state = .error
+            if case .error(let errorMessage) = modelManager.loadState {
+                error = .verbose("Local model error: \(errorMessage)")
+            } else {
+                error = .verbose("Local model is not loaded. Please check your local model settings.")
+            }
+            return
+        }
+        
         Task {
+            print("🤖 Generating response with local model...")
             // Generate response using local model
             await modelManager.generate(prompt: prompt)
             
             // Wait for generation to complete and update UI
             await MainActor.run {
+                print("✅ Local generation completed, output length: \(modelManager.outputText.count)")
                 // Update the assistant message with the generated content
                 if let lastIndex = self.messages.lastIndex(where: { $0.type == .assistant && $0.isInteracting }) {
                     let updatedMessage = MessageRow(
                         type: .assistant,
                         isInteracting: false,
-                        contentType: .rawText(modelManager.outputText)
+                        contentType: .rawText(modelManager.outputText.isEmpty ? "No response generated." : modelManager.outputText)
                     )
                     self.messages[lastIndex] = updatedMessage
                 }
@@ -432,6 +469,31 @@ enum ConversationState: Equatable {
             self.state = .error
             self.error = .verbose("Local model '\(selectedLocalModel)' is not downloaded.")
             return
+        }
+        
+        // CRITICAL FIX: Load the local model into ModelManager if not already loaded
+        Task {
+            // Check if the model is already loaded
+            if case .loaded(_) = modelManager.loadState {
+                print("✅ Local model already loaded: \(selectedLocalModel)")
+            } else {
+                print("🔧 Loading local model: \(selectedLocalModel)")
+                await modelManager.localModelDidChange(to: localModel)
+                
+                await MainActor.run {
+                    switch modelManager.loadState {
+                    case .loaded(_):
+                        print("✅ Local model loaded successfully: \(selectedLocalModel)")
+                    case .error(let error):
+                        print("❌ Failed to load local model: \(error)")
+                        self.state = .error
+                        self.error = .verbose("Failed to load local model: \(error)")
+                        return
+                    case .idle:
+                        print("⚠️ Local model loading returned idle state")
+                    }
+                }
+            }
         }
         
         // Create a pseudo LLMModel for local model compatibility
