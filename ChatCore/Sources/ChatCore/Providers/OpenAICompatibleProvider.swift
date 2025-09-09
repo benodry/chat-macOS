@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Basic OpenAI-compatible provider (chat/completions) with optional streaming.
 /// Streaming implemented via SSE-like incremental lines beginning with 'data:'
