@@ -13,6 +13,7 @@ public final class BedrockProvider: ChatProvider {
     private let session: URLSession
     private let decoder = JSONDecoder()
     private let capabilitiesValue = ProviderCapabilities(supportsTools: false, supportsReasoning: false, supportsStreaming: true, maxContextTokens: nil)
+    // TODO: Enable tool call parsing for Bedrock agents / tool orchestrations when gateway supports it.
     // Cache for model listing (simple, 5 min)
     private var cachedModels: [ModelInfo]? = nil
     private var lastFetch: Date? = nil

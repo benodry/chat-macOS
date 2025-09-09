@@ -17,6 +17,8 @@ class MessageViewModel: Identifiable, Hashable {
     var webSources: [WebSearchSource]?
     let files: [String]?
     var reasoning: String?
+    var toolCalls: [ToolCall] = []
+    var toolResults: [ToolResult] = []
     
     var isBrowsingWeb: Bool = false
     var webSearchUpdates: [String] = []
@@ -41,6 +43,7 @@ class MessageViewModel: Identifiable, Hashable {
         self.author = message.author
         self.files = message.files
         self.reasoning = message.reasoning
+    // Tool metadata not yet mapped from legacy Message model (placeholder).
         
         // Initialize webSources to nil initially
         self.webSources = nil

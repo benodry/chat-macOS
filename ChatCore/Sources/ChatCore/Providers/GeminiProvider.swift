@@ -17,6 +17,7 @@ public final class GeminiProvider: ChatProvider {
     private let session: URLSession
     private let decoder = JSONDecoder()
     private let capabilitiesValue = ProviderCapabilities(supportsTools: false, supportsReasoning: true, supportsStreaming: true, maxContextTokens: nil)
+    // TODO: Future: parse tool invocation parts when Gemini tool configs are enabled.
     public init(configuration: Configuration, session: URLSession = .shared) { self.config = configuration; self.session = session }
     public func capabilities() -> ProviderCapabilities { capabilitiesValue }
     // Model listing (dynamic). We fetch once per provider instance; simple in‑memory cache.
