@@ -13,8 +13,19 @@ import Combine
     var engine: ChatEngine?
     var modelInfo: ModelInfo? {
         didSet {
-            guard let modelInfo, providerKind == .openAI else { return }
-            UserDefaults.standard.set(modelInfo.modelId, forKey: "openai_selected_model")
+            switch providerKind {
+            case .openAI:
+                guard let modelInfo else { return }
+                UserDefaults.standard.set(modelInfo.modelId, forKey: "openai_selected_model")
+            case .gemini:
+                guard let modelInfo else { return }
+                UserDefaults.standard.set(modelInfo.modelId, forKey: "gemini_selected_model")
+            case .bedrock:
+                guard let modelInfo else { return }
+                UserDefaults.standard.set(modelInfo.modelId, forKey: "bedrock_selected_model")
+            default:
+                break
+            }
         }
     }
     var store: ConversationStore?
@@ -57,6 +68,20 @@ import Combine
             let base = URL(string: UserDefaults.standard.string(forKey: UserDefaultsKeys.openAIBaseURL) ?? "https://api.openai.com/")!
             let modelId = (modelInfo?.modelId) ?? UserDefaults.standard.string(forKey: "openai_selected_model") ?? "gpt-4o-mini"
             let provider = OpenAICompatibleProvider(configuration: .init(baseURL: base, apiKey: key, defaultModel: modelId))
+            engine = ChatEngine(provider: provider, store: store)
+            cancelHFRefreshTimer()
+        case .gemini:
+            guard let key = UserDefaults.standard.string(forKey: UserDefaultsKeys.geminiAPIKey), !key.isEmpty else { engine = nil; return }
+            let modelId = (modelInfo?.modelId) ?? UserDefaults.standard.string(forKey: "gemini_selected_model") ?? "gemini-1.5-flash"
+            let provider = GeminiProvider(configuration: .init(apiKey: key, defaultModel: modelId))
+            engine = ChatEngine(provider: provider, store: store)
+            cancelHFRefreshTimer()
+        case .bedrock:
+            guard let accessKey = UserDefaults.standard.string(forKey: UserDefaultsKeys.bedrockAccessKey), !accessKey.isEmpty,
+                  let secretKey = UserDefaults.standard.string(forKey: UserDefaultsKeys.bedrockSecretKey), !secretKey.isEmpty else { engine = nil; return }
+            let region = UserDefaults.standard.string(forKey: UserDefaultsKeys.bedrockRegion) ?? "us-east-1"
+            let modelId = (modelInfo?.modelId) ?? UserDefaults.standard.string(forKey: "bedrock_selected_model") ?? "anthropic.claude-3-5-sonnet-20241022-v2:0"
+            let provider = BedrockProvider(configuration: .init(accessKeyId: accessKey, secretAccessKey: secretKey, region: region, defaultModel: modelId))
             engine = ChatEngine(provider: provider, store: store)
             cancelHFRefreshTimer()
         default:
@@ -157,8 +182,21 @@ import Combine
         engine?.loadConversation(convo)
     }
     func loadPersistedModel() {
-        if providerKind == .openAI, modelInfo == nil, let saved = UserDefaults.standard.string(forKey: "openai_selected_model") {
-            modelInfo = ModelInfo(modelId: saved, displayName: saved, provider: .openAI, capabilities: ProviderCapabilities.basicStreaming)
+        switch providerKind {
+        case .openAI:
+            if modelInfo == nil, let saved = UserDefaults.standard.string(forKey: "openai_selected_model") {
+                modelInfo = ModelInfo(modelId: saved, displayName: saved, provider: .openAI, capabilities: ProviderCapabilities.basicStreaming)
+            }
+        case .gemini:
+            if modelInfo == nil, let saved = UserDefaults.standard.string(forKey: "gemini_selected_model") {
+                modelInfo = ModelInfo(modelId: saved, displayName: saved, provider: .gemini, capabilities: ProviderCapabilities(supportsTools: true, supportsReasoning: true, supportsStreaming: true, maxContextTokens: 1_048_576))
+            }
+        case .bedrock:
+            if modelInfo == nil, let saved = UserDefaults.standard.string(forKey: "bedrock_selected_model") {
+                modelInfo = ModelInfo(modelId: saved, displayName: saved, provider: .bedrock, capabilities: ProviderCapabilities(supportsTools: true, supportsReasoning: true, supportsStreaming: true, maxContextTokens: 200_000))
+            }
+        default:
+            break
         }
     }
     // MARK: - Export / Import (stubs)
@@ -184,14 +222,21 @@ struct ProviderPickerView: View {
     @Environment(ProviderRuntime.self) private var runtime
     @State private var openAIKey: String = UserDefaults.standard.string(forKey: UserDefaultsKeys.openAIAPIKey) ?? ""
     @State private var openAIBase: String = UserDefaults.standard.string(forKey: UserDefaultsKeys.openAIBaseURL) ?? "https://api.openai.com/"
+    @State private var geminiKey: String = UserDefaults.standard.string(forKey: UserDefaultsKeys.geminiAPIKey) ?? ""
+    @State private var bedrockAccessKey: String = UserDefaults.standard.string(forKey: UserDefaultsKeys.bedrockAccessKey) ?? ""
+    @State private var bedrockSecretKey: String = UserDefaults.standard.string(forKey: UserDefaultsKeys.bedrockSecretKey) ?? ""
+    @State private var bedrockRegion: String = UserDefaults.standard.string(forKey: UserDefaultsKeys.bedrockRegion) ?? "us-east-1"
     
     var body: some View {
         Form {
             Picker("Provider", selection: $runtime.providerKind) {
                 Text("HuggingFace").tag(ProviderKind.huggingFace)
                 Text("OpenAI").tag(ProviderKind.openAI)
+                Text("Google Gemini").tag(ProviderKind.gemini)
+                Text("AWS Bedrock").tag(ProviderKind.bedrock)
             }
             .onChange(of: runtime.providerKind) { _, _ in runtime.rebuildProvider() }
+            
             if runtime.providerKind == .openAI {
                 TextField("Base URL", text: $openAIBase)
                 SecureField("API Key", text: $openAIKey)
@@ -202,11 +247,38 @@ struct ProviderPickerView: View {
                     runtime.rebuildProvider()
                     runtime.refreshLocalConversations()
                 }.disabled(openAIKey.isEmpty)
+            } else if runtime.providerKind == .gemini {
+                SecureField("API Key", text: $geminiKey)
+                Text("Get your API key from Google AI Studio").font(.caption2).foregroundStyle(.secondary)
+                if geminiKey.isEmpty { Text("Enter API key to enable Gemini provider").foregroundStyle(.red).font(.caption) }
+                Button("Save & Rebuild") {
+                    UserDefaults.standard.set(geminiKey, forKey: UserDefaultsKeys.geminiAPIKey)
+                    runtime.rebuildProvider()
+                    runtime.refreshLocalConversations()
+                }.disabled(geminiKey.isEmpty)
+            } else if runtime.providerKind == .bedrock {
+                TextField("AWS Access Key ID", text: $bedrockAccessKey)
+                SecureField("AWS Secret Access Key", text: $bedrockSecretKey)
+                TextField("AWS Region", text: $bedrockRegion)
+                Text("Configure AWS credentials with Bedrock access").font(.caption2).foregroundStyle(.secondary)
+                if bedrockAccessKey.isEmpty || bedrockSecretKey.isEmpty {
+                    Text("Enter AWS credentials to enable Bedrock provider").foregroundStyle(.red).font(.caption)
+                }
+                Button("Save & Rebuild") {
+                    UserDefaults.standard.set(bedrockAccessKey, forKey: UserDefaultsKeys.bedrockAccessKey)
+                    UserDefaults.standard.set(bedrockSecretKey, forKey: UserDefaultsKeys.bedrockSecretKey)
+                    UserDefaults.standard.set(bedrockRegion, forKey: UserDefaultsKeys.bedrockRegion)
+                    runtime.rebuildProvider()
+                    runtime.refreshLocalConversations()
+                }.disabled(bedrockAccessKey.isEmpty || bedrockSecretKey.isEmpty)
+            }
+            
+            if runtime.providerKind != .huggingFace {
                 Divider()
                 if !runtime.localConversations.isEmpty {
                     Text("Local Conversations").font(.subheadline).padding(.top, 4)
                     ScrollView {
-                        ForEach(runtime.localConversations, id: \..id) { convo in
+                        ForEach(runtime.localConversations, id: \.id) { convo in
                             HStack {
                                 VStack(alignment: .leading) {
                                     Text(convo.title.isEmpty ? "(untitled)" : convo.title).lineLimit(1)
@@ -226,7 +298,7 @@ struct ProviderPickerView: View {
             }
         }
         .padding()
-        .frame(width: 320, height: runtime.providerKind == .openAI ? 240 : 120)
+        .frame(width: 380, height: runtime.providerKind == .huggingFace ? 120 : (runtime.providerKind == .bedrock ? 300 : 260))
         .onAppear { runtime.configureInitial() }
     }
 }
