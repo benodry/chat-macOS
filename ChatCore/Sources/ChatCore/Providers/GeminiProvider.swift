@@ -118,6 +118,7 @@ public final class GeminiProvider: ChatProvider {
         var request = URLRequest(url: config.baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    // TODO: Support safety settings, systemInstruction, tool config when tool calling added (MCP integration phase).
         struct Part: Codable { let text: String }
         struct Content: Codable { let role: String; let parts: [Part] }
         struct GenerationConfigWrapper: Codable { let temperature: Double?; let maxOutputTokens: Int?; let topP: Double? }
@@ -130,7 +131,7 @@ public final class GeminiProvider: ChatProvider {
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { throw ProviderError.network("Gemini bad status") }
         var assistant = ChatMessage(role: .assistant, content: "")
         var accumulator = DeltaAccumulator()
-        for try await rawLine in bytes.lines {
+    for try await rawLine in bytes.lines {
             let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
             let parsed = GeminiProvider.parseLine(trimmed, decoder: decoder)
@@ -139,6 +140,7 @@ public final class GeminiProvider: ChatProvider {
                 assistant.content += parsed.text
                 let delta = accumulator.delta(new: assistant.content)
                 if !delta.isEmpty { stream(.token(delta)) }
+        // TODO: Incremental persistence hook: write partial assistant message with current accumulated content & reasoning to ConversationStore.
             }
         }
         stream(.completed)

@@ -6,6 +6,9 @@ public protocol ConversationStore {
     func load(id: UUID) throws -> ChatConversation?
     func save(_ conversation: ChatConversation) throws
     func appendMessage(conversationId: UUID, message: ChatMessage) throws
+    /// Upsert a partial assistant message (by temporary UUID) during streaming.
+    /// If message with same id exists and is last, replace; else append.
+    func upsertPartialAssistant(conversationId: UUID, message: ChatMessage) throws
     func delete(id: UUID) throws
 }
 
@@ -59,6 +62,17 @@ public final class JSONConversationStore: ConversationStore {
         let path = url(for: conversationId)
         guard fm.fileExists(atPath: path.path) else { throw StoreError.notFound }
         var convo = try decoder.decode(ChatConversation.self, from: Data(contentsOf: path))
+        convo.messages.append(message)
+        convo.updatedAt = Date()
+        try write(convo, to: path)
+    }
+    public func upsertPartialAssistant(conversationId: UUID, message: ChatMessage) throws {
+        let path = url(for: conversationId)
+        guard fm.fileExists(atPath: path.path) else { throw StoreError.notFound }
+        var convo = try decoder.decode(ChatConversation.self, from: Data(contentsOf: path))
+        if let last = convo.messages.last, last.id == message.id {
+            convo.messages.removeLast()
+        }
         convo.messages.append(message)
         convo.updatedAt = Date()
         try write(convo, to: path)

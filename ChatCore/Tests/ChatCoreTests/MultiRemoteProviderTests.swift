@@ -87,3 +87,75 @@ class TestURLProtocol: URLProtocol {
     }
     override func stopLoading() {}
 }
+
+// MARK: - Incremental Persistence Test
+final class IncrementalPersistenceTests: XCTestCase {
+    struct StreamingMockProvider: ChatProvider {
+        var kind: ProviderKind { .openAI }
+        func capabilities() -> ProviderCapabilities { .basicStreaming }
+        func listModels() async throws -> [ModelInfo] { [] }
+        func send(messages: [ChatMessage], model: ModelInfo, config: GenerationConfig, stream: @escaping (TokenEvent) -> Void) async throws -> ChatMessage {
+            stream(.reasoning("Step 1"))
+            stream(.token("Hel"))
+            stream(.token("lo"))
+            stream(.completed)
+            return ChatMessage(role: .assistant, content: "Hello", metadata: MessageMetadata(reasoning: "Step 1"))
+        }
+    }
+    func testIncrementalPersistenceWritesPartial() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let store = try JSONConversationStore(rootDirectory: tmp)
+        let provider = StreamingMockProvider()
+        let engine = ChatEngine(provider: provider, store: store)
+        let model = ModelInfo(modelId: "mock", displayName: "Mock", provider: .openAI, capabilities: .basicStreaming)
+        let exp = expectation(description: "stream complete")
+        Task {
+            _ = try await engine.sendUserMessage("Hi", model: model) { _ in }
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2)
+        // Validate conversation file contains assistant message with full content
+        let convs = try store.loadAll()
+        XCTAssertEqual(convs.count, 1)
+        let convo = convs[0]
+        XCTAssertEqual(convo.messages.count, 2)
+        let assistant = convo.messages.last!
+        XCTAssertEqual(assistant.content, "Hello")
+        XCTAssertEqual(assistant.metadata.reasoning, "Step 1")
+    }
+}
+
+// MARK: - Tool Invocation Tests
+final class ToolInvocationTests: XCTestCase {
+    struct ToolCallMockProvider: ChatProvider {
+        var kind: ProviderKind { .openAI }
+        func capabilities() -> ProviderCapabilities { .basicStreaming }
+        func listModels() async throws -> [ModelInfo] { [] }
+        func send(messages: [ChatMessage], model: ModelInfo, config: GenerationConfig, stream: @escaping (TokenEvent) -> Void) async throws -> ChatMessage {
+            // Emit a tool call then completion
+            let call = ToolCall(name: "echo", argumentsJSON: "{\"msg\":\"hi\"}")
+            stream(.toolCall(call))
+            stream(.completed)
+            return ChatMessage(role: .assistant, content: "Done")
+        }
+    }
+    func testToolCallExecutesAndStreamsResult() throws {
+        let provider = ToolCallMockProvider()
+        let engine = ChatEngine(provider: provider, store: nil)
+        let registry = ToolRegistry()
+        Task { await registry.register(EchoTool()) }
+        engine.toolRegistry = registry
+        let model = ModelInfo(modelId: "m", displayName: "m", provider: .openAI, capabilities: .basicStreaming)
+        let exp = expectation(description: "completed")
+        var sawToolResult = false
+        Task {
+            _ = try await engine.sendUserMessage("hi", model: model) { event in
+                if case .toolResult(let tr) = event { if tr.outputJSON.contains("echo") { sawToolResult = true } }
+                if case .completed = event { exp.fulfill() }
+            }
+        }
+        wait(for: [exp], timeout: 2)
+        XCTAssertTrue(sawToolResult)
+    }
+}

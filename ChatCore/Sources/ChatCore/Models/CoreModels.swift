@@ -7,6 +7,7 @@ public enum ChatRole: String, Codable {
 public struct MessageMetadata: Codable, Hashable {
     public var toolCalls: [ToolCall] = []
     public var toolResults: [ToolResult] = []
+    public var reasoning: String? = nil
     public init(toolCalls: [ToolCall] = [], toolResults: [ToolResult] = []) {
         self.toolCalls = toolCalls
         self.toolResults = toolResults
