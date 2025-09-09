@@ -20,6 +20,12 @@ public final class GeminiProvider: ChatProvider {
     public init(configuration: Configuration, session: URLSession = .shared) { self.config = configuration; self.session = session }
     public func capabilities() -> ProviderCapabilities { capabilitiesValue }
     public func listModels() async throws -> [ModelInfo] { [ModelInfo(modelId: config.model, displayName: config.model, provider: kind, capabilities: capabilities())] }
+    // Exposed for tests: parse a single streaming JSON line returning concatenated text (if any)
+    struct StreamResp: Codable { struct Candidate: Codable { struct Content: Codable { struct Part: Codable { let text: String? } let parts: [Part] } let content: Content } let candidates: [Candidate]? }
+    static func extractText(from line: String, decoder: JSONDecoder) -> String {
+        guard let data = line.data(using: .utf8), let decoded = try? decoder.decode(StreamResp.self, from: data) else { return "" }
+        return decoded.candidates?.first?.content.parts.compactMap { $0.text }.joined() ?? ""
+    }
     public func send(messages: [ChatMessage], model: ModelInfo, config gen: GenerationConfig, stream: @escaping (TokenEvent) -> Void) async throws -> ChatMessage {
         // Gemini (v1beta) generateContent streaming endpoint: POST /v1beta/models/{model}:streamGenerateContent?key=API_KEY
         let path = "/v1beta/models/\(model.modelId):streamGenerateContent?key=\(config.apiKey)"
@@ -38,13 +44,11 @@ public final class GeminiProvider: ChatProvider {
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { throw ProviderError.network("Gemini bad status") }
         var assistant = ChatMessage(role: .assistant, content: "")
         var accumulator = DeltaAccumulator()
-        for try await line in bytes.lines {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        for try await rawLine in bytes.lines {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
-            // Each line should be a JSON object with candidates[0].content.parts[].text fragments
-            struct StreamResp: Codable { struct Candidate: Codable { struct Content: Codable { struct Part: Codable { let text: String? } let parts: [Part] } let content: Content } let candidates: [Candidate]? }
-            guard let data = trimmed.data(using: .utf8), let decoded = try? decoder.decode(StreamResp.self, from: data) else { continue }
-            if let piece = decoded.candidates?.first?.content.parts.compactMap({ $0.text }).joined(), !piece.isEmpty {
+            let piece = GeminiProvider.extractText(from: trimmed, decoder: decoder)
+            if !piece.isEmpty {
                 assistant.content += piece
                 let delta = accumulator.delta(new: assistant.content)
                 if !delta.isEmpty { stream(.token(delta)) }

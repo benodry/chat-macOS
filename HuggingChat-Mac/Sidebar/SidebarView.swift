@@ -62,6 +62,7 @@ struct SidebarView: View {
                                     .font(.headline)
                                 HStack(spacing: 4) {
                                     providerBadge(for: convo.provider)
+                                    capabilityBadges(for: convo)
                                     Text(convo.updatedAt, style: .time).font(.caption2).foregroundStyle(.secondary)
                                 }
                             }
@@ -197,6 +198,26 @@ struct SidebarView: View {
         } message: {
             Text("Are you sure you want to delete this conversation? This action cannot be undone.")
         }
+    }
+    @ViewBuilder private func capabilityBadges(for convo: ChatConversation) -> some View {
+        // Derive capabilities heuristically: look at provider kind defaults.
+        let caps: ProviderCapabilities = {
+            switch convo.provider {
+            case .huggingFace: return .init(supportsTools: false, supportsReasoning: true, supportsStreaming: true, maxContextTokens: nil)
+            case .openAI: return .basicStreaming
+            case .gemini: return .init(supportsTools: false, supportsReasoning: true, supportsStreaming: true, maxContextTokens: nil)
+            case .bedrock: return .init(supportsTools: false, supportsReasoning: false, supportsStreaming: true, maxContextTokens: nil)
+            case .local: return .basicStreaming
+            }
+        }()
+        HStack(spacing: 2) {
+            if caps.supportsReasoning { smallCap("R", .purple) }
+            if caps.supportsTools { smallCap("T", .teal) }
+            if caps.supportsStreaming { smallCap("S", .green) }
+        }
+    }
+    private func smallCap(_ text: String, _ color: Color) -> some View {
+        Text(text).font(.caption2).bold().padding(.horizontal, 3).background(color.opacity(0.15)).foregroundStyle(color).clipShape(RoundedRectangle(cornerRadius: 3))
     }
     private func filteredConversations() -> [ChatConversation] {
         let base = runtime.unifiedConversations()

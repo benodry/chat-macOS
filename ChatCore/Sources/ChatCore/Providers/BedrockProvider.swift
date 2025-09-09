@@ -16,6 +16,11 @@ public final class BedrockProvider: ChatProvider {
     public init(configuration: Configuration, session: URLSession = .shared) { self.config = configuration; self.session = session }
     public func capabilities() -> ProviderCapabilities { capabilitiesValue }
     public func listModels() async throws -> [ModelInfo] { [ModelInfo(modelId: config.modelId, displayName: config.modelId, provider: kind, capabilities: capabilities())] }
+    struct DeltaObj: Codable { let delta: String?; let completed: Bool? }
+    static func parseDelta(line: String, decoder: JSONDecoder) -> DeltaObj? {
+        guard let data = line.data(using: .utf8) else { return nil }
+        return try? decoder.decode(DeltaObj.self, from: data)
+    }
     public func send(messages: [ChatMessage], model: ModelInfo, config gen: GenerationConfig, stream: @escaping (TokenEvent) -> Void) async throws -> ChatMessage {
         // Expect gateway to accept POST /invoke with JSON payload {modelId, messages, parameters}
         var request = URLRequest(url: config.endpoint.appendingPathComponent("invoke"))
@@ -29,19 +34,16 @@ public final class BedrockProvider: ChatProvider {
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else { throw ProviderError.network("Bedrock gateway bad status") }
         var assistant = ChatMessage(role: .assistant, content: "")
         var accumulator = DeltaAccumulator()
-        for try await line in bytes.lines {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        for try await rawLine in bytes.lines {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
-            // Expect each line as {"delta":"text"} or {"completed":true}
-            struct DeltaObj: Codable { let delta: String?; let completed: Bool? }
-            if let data = trimmed.data(using: .utf8), let decoded = try? decoder.decode(DeltaObj.self, from: data) {
-                if let piece = decoded.delta, !piece.isEmpty {
-                    assistant.content += piece
-                    let d = accumulator.delta(new: assistant.content)
-                    if !d.isEmpty { stream(.token(d)) }
-                }
-                if decoded.completed == true { break }
+            guard let decoded = BedrockProvider.parseDelta(line: trimmed, decoder: decoder) else { continue }
+            if let piece = decoded.delta, !piece.isEmpty {
+                assistant.content += piece
+                let d = accumulator.delta(new: assistant.content)
+                if !d.isEmpty { stream(.token(d)) }
             }
+            if decoded.completed == true { break }
         }
         stream(.completed)
         return assistant
