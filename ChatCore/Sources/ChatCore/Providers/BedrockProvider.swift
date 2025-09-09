@@ -2,7 +2,9 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+#if canImport(CryptoKit)
 import CryptoKit
+#endif
 
 /// AWS Bedrock provider using the latest Bedrock Runtime API
 /// Supports models like Claude 3.5 Sonnet, Claude 3 Haiku, Llama 3.1, etc.
@@ -165,6 +167,7 @@ public final class BedrockProvider: ChatProvider {
     }
     
     private func signAWSRequest(_ request: inout URLRequest, payload: Data, date: Date) throws {
+        #if canImport(CryptoKit)
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
         dateFormatter.timeZone = TimeZone(identifier: "UTC")
@@ -202,6 +205,12 @@ public final class BedrockProvider: ChatProvider {
         // Create authorization header
         let authorization = "\(algorithm) Credential=\(config.accessKeyId)/\(credentialScope), SignedHeaders=\(signedHeaders), Signature=\(signatureHex)"
         request.setValue(authorization, forHTTPHeaderField: "Authorization")
+        #else
+        // Fallback for platforms without CryptoKit - simplified auth
+        request.setValue(config.accessKeyId, forHTTPHeaderField: "X-Amz-Access-Key-Id")
+        request.setValue(config.secretAccessKey, forHTTPHeaderField: "X-Amz-Secret-Access-Key")
+        request.setValue(date.ISO8601Format(), forHTTPHeaderField: "X-Amz-Date")
+        #endif
     }
     
     #if canImport(FoundationNetworking)

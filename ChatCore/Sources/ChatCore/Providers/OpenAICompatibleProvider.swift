@@ -61,9 +61,41 @@ public final class OpenAICompatibleProvider: ChatProvider {
         request.httpBody = try jsonEncoder.encode(payload)
 
         // Streaming via bytes
+        #if canImport(FoundationNetworking)
+        // For Linux/FoundationNetworking, use data task instead of bytes
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            throw ProviderError.network("Bad status code: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
+        }
+        
+        // Process the response data (non-streaming for Linux compatibility)
+        let responseString = String(data: data, encoding: .utf8) ?? ""
+        var assistant = ChatMessage(role: .assistant, content: "")
+        var accumulator = DeltaAccumulator()
+        
+        // Parse line by line for SSE format
+        let lines = responseString.components(separatedBy: .newlines)
+        for line in lines {
+            let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedLine.isEmpty else { continue }
+            if trimmedLine == "data: [DONE]" { break }
+            if trimmedLine.hasPrefix("data:") {
+                let jsonPart = trimmedLine.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                guard let jsonData = jsonPart.data(using: .utf8) else { continue }
+                if let delta = try? decodeDelta(data: jsonData) {
+                    if !delta.isEmpty {
+                        assistant.content += delta
+                        let emitted = accumulator.delta(new: assistant.content)
+                        if !emitted.isEmpty { stream(.token(emitted)) }
+                    }
+                }
+            }
+        }
+        #else
+        // For macOS, use streaming bytes
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
-            throw ProviderError.network("Bad status code")
+            throw ProviderError.network("Bad status code: \(http.statusCode)")
         }
         var assistant = ChatMessage(role: .assistant, content: "")
         var accumulator = DeltaAccumulator()
@@ -83,6 +115,7 @@ public final class OpenAICompatibleProvider: ChatProvider {
                 }
             }
         }
+        #endif
         stream(.completed)
         return assistant
     }

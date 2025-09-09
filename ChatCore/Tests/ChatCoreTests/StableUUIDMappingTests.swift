@@ -1,5 +1,8 @@
 import XCTest
 @testable import ChatCore
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 
 final class StableUUIDMappingTests: XCTestCase {
     func testDeterministicUUIDFromRemoteId() throws {
@@ -9,10 +12,7 @@ final class StableUUIDMappingTests: XCTestCase {
         // Re-implement minimal stable hash (mirrors HFAdapters SHA256 first 16 bytes) to ensure contract stability.
         func stableUUID(_ remoteId: String) -> UUID {
             // Reference implementation for test only.
-            let data = Data(remoteId.utf8)
-            #if canImport(CryptoKit)
-            import CryptoKit
-            #endif
+            let _ = Data(remoteId.utf8)
             // Fallback simple deterministic hash if CryptoKit not available in test context.
             var hasher = Hasher(); hasher.combine(remoteId); let h = hasher.finalize()
             var bytes = withUnsafeBytes(of: h.bigEndian) { Array($0) }
