@@ -149,6 +149,18 @@ struct MessageView: View {
             .onHover { isHovering in
                 showMessageControls = isHovering
             }
+        case .tool:
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Tool Output")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                MarkdownView(text: message.content)
+                    .markdownRenderingThread(.main)
+                    .markdownRenderingMode(.optimized)
+                    .codeHighlighterTheme(CodeHighlighterTheme(lightModeThemeName: "xcode", darkModeThemeName: "xcode-dark"))
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .system:
             EmptyView()
         }

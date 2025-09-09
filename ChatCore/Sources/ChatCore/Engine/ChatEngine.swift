@@ -67,11 +67,18 @@ public final class ChatEngine {
         }
         // Append assistant
         if var updated = activeConversation {
-            // Replace last partial with finalized assistant (include metadata)
+            // Replace last partial with finalized assistant (include metadata). Also persist synthetic tool messages.
             if let idx = updated.messages.lastIndex(where: { $0.id == assistantId }) {
                 updated.messages[idx] = finalAssistant
             } else {
                 updated.messages.append(finalAssistant)
+            }
+            // After assistant final, append tool messages for each tool result for clearer history (optional)
+            if !workingAssistant.metadata.toolCalls.isEmpty {
+                for (call, result) in zip(workingAssistant.metadata.toolCalls, workingAssistant.metadata.toolResults) {
+                    let toolMsg = ChatMessage(role: .tool, content: result.outputJSON, metadata: MessageMetadata(toolCalls: [call], toolResults: [result]))
+                    updated.messages.append(toolMsg)
+                }
             }
             updated.updatedAt = Date()
             activeConversation = updated

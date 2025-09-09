@@ -20,8 +20,8 @@ public final class OpenAICompatibleProvider: ChatProvider {
     private let session: URLSession
     private let jsonDecoder = JSONDecoder()
     private let jsonEncoder = JSONEncoder()
-    // TODO: Detect function/tool calls in streaming delta (OpenAI: choices[].delta.tool_calls)
-    private let capabilitiesValue: ProviderCapabilities = .init(supportsTools: false, supportsReasoning: false, supportsStreaming: true, maxContextTokens: nil)
+    // Function/tool call detection (OpenAI: choices[].delta.tool_calls)
+    private let capabilitiesValue: ProviderCapabilities = .init(supportsTools: true, supportsReasoning: false, supportsStreaming: true, maxContextTokens: nil)
     public init(configuration: Configuration, session: URLSession = .shared) {
         self.config = configuration
         self.session = session
@@ -64,6 +64,8 @@ public final class OpenAICompatibleProvider: ChatProvider {
             throw ProviderError.network("Bad status code")
         }
         var assistant = ChatMessage(role: .assistant, content: "")
+        // Accumulate tool call arguments until complete JSON to emit TokenEvent.toolCall
+        var toolCallBuffers: [String: (name: String, args: String)] = [:]
         var accumulator = DeltaAccumulator()
         for try await lineData in bytes.lines {
             let line = lineData.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -72,11 +74,25 @@ public final class OpenAICompatibleProvider: ChatProvider {
             if line.hasPrefix("data:") {
                 let jsonPart = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                 guard let data = jsonPart.data(using: .utf8) else { continue }
-                if let delta = try? decodeDelta(data: data) {
-                    if !delta.isEmpty {
-                        assistant.content += delta
+                if let parsed = try? decodeStreamingPayload(data: data) {
+                    if !parsed.deltaContent.isEmpty {
+                        assistant.content += parsed.deltaContent
                         let emitted = accumulator.delta(new: assistant.content)
                         if !emitted.isEmpty { stream(.token(emitted)) }
+                    }
+                    // Process tool call partials
+                    for tc in parsed.toolCallPartials {
+                        var buffer = toolCallBuffers[tc.id] ?? (tc.name, "")
+                        buffer.args += tc.argumentsFragment
+                        toolCallBuffers[tc.id] = buffer
+                        // Attempt to detect complete JSON (naive braces balance)
+                        if isLikelyCompleteJSON(buffer.args) {
+                            let fullArgs = buffer.args.trimmingCharacters(in: .whitespacesAndNewlines)
+                            // Emit tool call event
+                            let call = ToolCall(name: buffer.name, argumentsJSON: fullArgs)
+                            stream(.toolCall(call))
+                            toolCallBuffers.removeValue(forKey: tc.id)
+                        }
                     }
                 }
             }
@@ -89,15 +105,42 @@ public final class OpenAICompatibleProvider: ChatProvider {
         struct Choice: Codable {
             struct Delta: Codable {
                 let content: String?
-                // Placeholder for future tool call parsing
-                // let tool_calls: [ToolCallPayload]? // map into TokenEvent.toolCall
+                let tool_calls: [ToolCallChunk]? // OpenAI style
             }
             let delta: Delta
         }
         let choices: [Choice]
     }
-    private func decodeDelta(data: Data) throws -> String {
+    private struct ToolCallChunk: Codable { let id: String?; let type: String?; let function: FunctionChunk? }
+    private struct FunctionChunk: Codable { let name: String?; let arguments: String? }
+    struct ToolCallPartial { let id: String; let name: String; let argumentsFragment: String }
+    private func decodeStreamingPayload(data: Data) throws -> (deltaContent: String, toolCallPartials: [ToolCallPartial]) {
         let decoded = try jsonDecoder.decode(StreamingResponse.self, from: data)
-        return decoded.choices.compactMap { $0.delta.content }.joined()
+        var content = ""
+        var partials: [ToolCallPartial] = []
+        for c in decoded.choices {
+            if let d = c.delta.content { content += d }
+            if let tcs = c.delta.tool_calls {
+                for chunk in tcs {
+                    guard let fid = chunk.id, let fname = chunk.function?.name, let frag = chunk.function?.arguments else { continue }
+                    partials.append(ToolCallPartial(id: fid, name: fname, argumentsFragment: frag))
+                }
+            }
+        }
+        return (content, partials)
+    }
+    private func isLikelyCompleteJSON(_ s: String) -> Bool {
+        var balance = 0
+        var inString = false
+        var prev: Character = " "
+        for ch in s {
+            if ch == "\"", prev != "\\" { inString.toggle() }
+            if !inString {
+                if ch == "{" { balance += 1 }
+                else if ch == "}" { balance -= 1 }
+            }
+            prev = ch
+        }
+        return balance == 0 && s.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") && s.contains("}")
     }
 }
