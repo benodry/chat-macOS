@@ -59,6 +59,19 @@ import Combine
             let provider = OpenAICompatibleProvider(configuration: .init(baseURL: base, apiKey: key, defaultModel: modelId))
             engine = ChatEngine(provider: provider, store: store)
             cancelHFRefreshTimer()
+        case .gemini:
+            guard let key = UserDefaults.standard.string(forKey: "gemini_api_key"), !key.isEmpty else { engine = nil; return }
+            let model = UserDefaults.standard.string(forKey: "gemini_model") ?? "gemini-1.5-flash"
+            let provider = GeminiProvider(configuration: .init(apiKey: key, model: model))
+            engine = ChatEngine(provider: provider, store: store)
+            cancelHFRefreshTimer()
+        case .bedrock:
+            let endpointStr = UserDefaults.standard.string(forKey: "bedrock_gateway") ?? "https://bedrock-gateway.local"
+            let model = UserDefaults.standard.string(forKey: "bedrock_model") ?? "anthropic.claude-3-haiku"
+            guard let endpoint = URL(string: endpointStr) else { engine = nil; return }
+            let provider = BedrockProvider(configuration: .init(modelId: model, endpoint: endpoint))
+            engine = ChatEngine(provider: provider, store: store)
+            cancelHFRefreshTimer()
         default:
             // Future providers
             engine = nil
@@ -190,6 +203,8 @@ struct ProviderPickerView: View {
             Picker("Provider", selection: $runtime.providerKind) {
                 Text("HuggingFace").tag(ProviderKind.huggingFace)
                 Text("OpenAI").tag(ProviderKind.openAI)
+                Text("Gemini").tag(ProviderKind.gemini)
+                Text("Bedrock").tag(ProviderKind.bedrock)
             }
             .onChange(of: runtime.providerKind) { _, _ in runtime.rebuildProvider() }
             if runtime.providerKind == .openAI {
@@ -223,6 +238,23 @@ struct ProviderPickerView: View {
                         }
                     }.frame(maxHeight: 140)
                 }
+            } else if runtime.providerKind == .gemini {
+                Text("Gemini API Key stored in Keychain / UserDefaults (placeholder)").font(.caption)
+                TextField("Gemini Model (e.g. gemini-1.5-flash)", text: Binding(
+                    get: { UserDefaults.standard.string(forKey: "gemini_model") ?? "gemini-1.5-flash" },
+                    set: { UserDefaults.standard.set($0, forKey: "gemini_model") }))
+                SecureField("API Key", text: Binding(
+                    get: { UserDefaults.standard.string(forKey: "gemini_api_key") ?? "" },
+                    set: { UserDefaults.standard.set($0, forKey: "gemini_api_key") }))
+                Button("Save & Rebuild") { runtime.rebuildProvider(); runtime.refreshLocalConversations() }
+            } else if runtime.providerKind == .bedrock {
+                TextField("Gateway Endpoint", text: Binding(
+                    get: { UserDefaults.standard.string(forKey: "bedrock_gateway") ?? "https://bedrock-gateway.local" },
+                    set: { UserDefaults.standard.set($0, forKey: "bedrock_gateway") }))
+                TextField("Model Id", text: Binding(
+                    get: { UserDefaults.standard.string(forKey: "bedrock_model") ?? "anthropic.claude-3-haiku" },
+                    set: { UserDefaults.standard.set($0, forKey: "bedrock_model") }))
+                Button("Save & Rebuild") { runtime.rebuildProvider(); runtime.refreshLocalConversations() }
             }
         }
         .padding()

@@ -281,7 +281,7 @@ Full MVP (after Phase 5):
 | JSON Conversation Store | Done | `JSONConversationStore` implemented (final-write only; incremental append deferred) |
 | OpenAI Provider | Done | `OpenAICompatibleProvider` basic streaming |
 | Local Conversation Mgmt UI | Partial | Create/rename/delete implemented (sidebar); export/import stubs added |
-| Gemini / Bedrock | Pending | Via facade (gateway preferred) |
+| Gemini / Bedrock | In Progress | GeminiProvider & BedrockProvider scaffolds added |
 | Local MLX Provider | Pending | After multi-remote stable |
 | MCP Client | Pending | JSON-RPC loop later |
 | Tool Loop | Pending | Autonomous cap (max iterations) |
