@@ -45,12 +45,18 @@ public final class ChatEngine {
                 workingAssistant.metadata.reasoning = [workingAssistant.metadata.reasoning, r].compactMap { $0 }.joined(separator: "\n")
                 if let store = store { try? store.upsertPartialAssistant(conversationId: conv.id, message: workingAssistant) }
             case .toolCall(let tc):
-                // Execute tool call immediately if registry available
+        // Persist tool call as a synthetic tool message? For now attach to assistant metadata.
+        workingAssistant.metadata.toolCalls.append(tc)
+        if let store = store { try? store.upsertPartialAssistant(conversationId: conv.id, message: workingAssistant) }
+        // Execute tool call immediately if registry available
                 Task { [weak self] in
                     guard let self, let reg = toolRegistry else { return }
                     if let result = try? await reg.invoke(name: tc.name, argumentsJSON: tc.argumentsJSON) {
                         let tr = ToolResult(toolCallId: tc.id, outputJSON: result)
-                        // Stream result event
+            // Attach result to metadata
+            workingAssistant.metadata.toolResults.append(tr)
+            if let store = store { try? store.upsertPartialAssistant(conversationId: conv.id, message: workingAssistant) }
+            // Stream result event
                         stream(.toolResult(tr))
                         // Optionally persist interim tool result inside assistant metadata in future
                     }

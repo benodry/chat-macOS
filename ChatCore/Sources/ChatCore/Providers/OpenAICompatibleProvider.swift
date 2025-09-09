@@ -20,6 +20,7 @@ public final class OpenAICompatibleProvider: ChatProvider {
     private let session: URLSession
     private let jsonDecoder = JSONDecoder()
     private let jsonEncoder = JSONEncoder()
+    // TODO: Detect function/tool calls in streaming delta (OpenAI: choices[].delta.tool_calls)
     private let capabilitiesValue: ProviderCapabilities = .init(supportsTools: false, supportsReasoning: false, supportsStreaming: true, maxContextTokens: nil)
     public init(configuration: Configuration, session: URLSession = .shared) {
         self.config = configuration
@@ -85,7 +86,14 @@ public final class OpenAICompatibleProvider: ChatProvider {
     }
 
     private struct StreamingResponse: Codable {
-        struct Choice: Codable { struct Delta: Codable { let content: String? }; let delta: Delta }
+        struct Choice: Codable {
+            struct Delta: Codable {
+                let content: String?
+                // Placeholder for future tool call parsing
+                // let tool_calls: [ToolCallPayload]? // map into TokenEvent.toolCall
+            }
+            let delta: Delta
+        }
         let choices: [Choice]
     }
     private func decodeDelta(data: Data) throws -> String {

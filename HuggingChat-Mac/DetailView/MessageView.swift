@@ -117,6 +117,23 @@ struct MessageView: View {
                                     SourcesPillView(webSources: webSources)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
+                                // Tool calls & results (simple list)
+                                if !message.toolCalls.isEmpty || !message.toolResults.isEmpty {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        ForEach(message.toolCalls, id: \.id) { tc in
+                                            Text("🔧 Tool Call: \(tc.name)")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        ForEach(message.toolResults, id: \.id) { tr in
+                                            Text("✅ Tool Result: \(tr.outputJSON)")
+                                                .font(.caption2)
+                                                .foregroundStyle(.green)
+                                                .textSelection(.enabled)
+                                        }
+                                    }
+                                    .padding(.top, 4)
+                                }
                             }
                             
                         }
