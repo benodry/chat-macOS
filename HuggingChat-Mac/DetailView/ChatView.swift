@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import ChatCore
 
 struct ChatView: View {
     
@@ -15,6 +16,7 @@ struct ChatView: View {
     
     @EnvironmentObject private var appDelegate: AppDelegate
     @Environment(CoordinatorModel.self) private var coordinator
+    @Environment(ProviderRuntime.self) private var providerRuntime
     @Environment(\.colorScheme) var colorScheme
     
     // Toolbar
@@ -64,7 +66,9 @@ struct ChatView: View {
                     }
                     
                     Group {
-                        if let _ = coordinator.selectedConversation {
+                        if providerRuntime.providerKind != .huggingFace, let convo = providerRuntime.engine?.currentConversation() {
+                            LocalConversationMessageListView(conversation: convo, isInteracting: providerRuntime.isStreaming, parentWidth: size.width)
+                        } else if let _ = coordinator.selectedConversation {
                             ChatMessageListView(
                                 parentWidth: size.width,
                                 contentHeight: size.height,
@@ -157,16 +161,16 @@ struct ChatView: View {
         .clipShape(RoundedRectangle(cornerRadius: isPipMode ? 22:0, style: .continuous))
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
-                Button(action: {
-                    showingPopover = true
-                }, label: {
-                    titleView()
-                })
+                Button(action: { showingPopover = true }, label: { titleView() })
                 .buttonStyle(.accessoryBar)
                 .popover(isPresented: $showingPopover, arrowEdge: .bottom) {
-                    ModelListView()
+                    VStack(spacing: 12) {
+                        ProviderPickerView()
+                        Divider()
+                        ModelListView()
+                    }
                         .frame(width: 320)
-                        .frame(maxHeight: 400)
+                        .frame(maxHeight: 520)
                 }
                 
             }
@@ -198,8 +202,8 @@ struct ChatView: View {
     @ViewBuilder
     func titleView() -> some View {
         HStack(alignment: .bottom, spacing: 5) {
-            let modelName = coordinator.activeModel?.displayName.split(separator: "/").last ?? ""
-            let companyName = coordinator.activeModel?.displayName.split(separator: "/").first ?? ""
+            let modelName = coordinator.activeModel?.displayName.split(separator: "/").last ?? providerRuntime.modelInfo?.displayName.split(separator: "/").last ?? ""
+            let companyName = coordinator.activeModel?.displayName.split(separator: "/").first ?? providerRuntime.modelInfo?.displayName.split(separator: "/").first ?? ""
 //            let primaryName = modelName.split(separator: "-").first ?? ""
 //            let secondaryName = modelName.components(separatedBy: primaryName).last?.trimmingCharacters(in: .whitespaces) ?? ""
             Text(companyName)
@@ -313,6 +317,37 @@ struct ChatMessageListView: View {
     }
 }
 
+// Local provider messages list
+struct LocalConversationMessageListView: View {
+    let conversation: ChatConversation
+    let isInteracting: Bool
+    let parentWidth: CGFloat
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                ForEach(conversation.messages) { msg in
+                    VStack(alignment: .leading, spacing: 6) {
+                        if msg.role == .user {
+                            Text(msg.content)
+                                .padding(10)
+                                .frame(maxWidth: parentWidth * 0.75, alignment: .leading)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(.blue.opacity(0.15)))
+                        } else {
+                            Text(msg.content.isEmpty ? (isInteracting ? "…" : "") : msg.content)
+                                .padding(10)
+                                .frame(maxWidth: parentWidth * 0.75, alignment: .leading)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(.gray.opacity(0.15)))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: msg.role == .user ? .trailing : .leading)
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal)
+        }
+    }
+}
+
 // 4. Scroll To Bottom Button
 struct ScrollToBottomButton: View {
     let action: () -> Void
@@ -365,9 +400,25 @@ struct ModelListView: View {
         "Qwen/QwQ-32B-Preview":"Great for most tasks"
     ]
     
+    @Environment(ProviderRuntime.self) private var runtime
     var body: some View {
-        if let data = UserDefaults.standard.data(forKey: UserDefaultsKeys.models),
-           let models = try? JSONDecoder().decode([LLMModel].self, from: data) {
+        if runtime.providerKind == .openAI {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Models").font(.headline)
+                Button(action: {
+                    Task {
+                        if let engine = runtime.engine, let list = try? await engine.provider.listModels() {
+                            runtime.modelInfo = list.first
+                        }
+                    }
+                }) {
+                    Text(runtime.modelInfo?.displayName ?? "Load Default Model")
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(10)
+        } else if let data = UserDefaults.standard.data(forKey: UserDefaultsKeys.models),
+                  let models = try? JSONDecoder().decode([LLMModel].self, from: data) {
             ScrollViewReader { proxy in
                 ScrollView {
                     ForEach(models, id: \.id) { model in
@@ -426,7 +477,7 @@ struct ModelListView: View {
                 .scrollIndicators(.hidden)
                 .padding(10)
             }
-        }
+    }
     }
 }
 

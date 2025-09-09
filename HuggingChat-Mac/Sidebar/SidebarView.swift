@@ -8,10 +8,16 @@
 import SwiftUI
 import Nuke
 import NukeUI
+import ChatCore
 
 struct SidebarView: View {
     @Environment(CoordinatorModel.self) private var coordinator
+    @Environment(ProviderRuntime.self) private var runtime
     @State private var searchChat: String = ""
+    @State private var providerFilter: ProviderKind? = nil
+    @State private var renamingConversation: ChatConversation? = nil
+    @State private var renameDraft: String = ""
+    @State private var showingRenameSheet: Bool = false
     @State private var showingConfirmation = false
     @Binding var showShareSheet: Bool
     @AppStorage(UserDefaultsKeys.baseURL) var baseURL: String = "https://huggingface.co"
@@ -21,63 +27,69 @@ struct SidebarView: View {
             @Bindable var coordinator = coordinator
             List {
                 Section {
-                    if !coordinator.conversations.isEmpty {
-                        ForEach(coordinator.conversations) { conversation in
-                            Text(conversation.title.withoutEmoji())
-                                .lineLimit(1)
-                                .font(.headline)
-                                .padding(.leading, 5)
-                                .fontWeight(.medium)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .frame(height: 35)
-                                .contentShape(Rectangle())
-                                .background {
-                                    if
-                                        coordinator.selectedConversation == conversation.id {
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .fill(.quinary)
-                                            .ignoresSafeArea(edges: .horizontal)
-//                                            .offset(x: -5)
-                                    }
-                                }
-                                .listRowInsets(EdgeInsets(top: 0, leading: -7, bottom: 0, trailing: -7))
-                                .tag(conversation.id)
-                                .onTapGesture {
-                                    handleChatSelection(for: conversation)
-                                }
-                                .contextMenu {
-                                    Button {
-                                        coordinator.selectedConversation = conversation.id
-                                        coordinator.loadConversationHistory()
-                                        coordinator.shareConversation()
-                                        showShareSheet = true
-                                    } label: {
-                                        Label("Share Chat", systemImage: "square.and.arrow.up")
-                                    }
-                                    
-                                    Link(destination: URL(string: "\(baseURL)/chat/conversation/" + conversation.serverId)!, label: {
-                                        Label("Open in Browser", systemImage: "globe")
-                                    })
-                                    
-                                    Divider()
-                                    Button {
-                                        coordinator.selectedConversation = conversation.id
-                                        coordinator.loadConversationHistory()
-                                        showingConfirmation = true
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
+                    HStack(spacing: 8) {
+                        providerBadge(for: .huggingFace)
+                        providerBadge(for: .openAI)
+                        providerBadge(for: .gemini)
+                        providerBadge(for: .bedrock)
+                        providerBadge(for: .local)
+                        Spacer()
+                        if runtime.providerKind != .huggingFace {
+                            Toggle(isOn: $runtime.includeHFInNonHFMode) { Text("Show HF") }
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .help("Include mirrored Hugging Face conversations in list")
                         }
+                        Menu {
+                            Button("All", action: { providerFilter = nil })
+                            Divider()
+                            ForEach([ProviderKind.huggingFace, .openAI, .gemini, .bedrock, .local], id: \.self) { kind in
+                                Button(kind.rawValue) { providerFilter = kind }
+                            }
+                            if providerFilter != nil { Button("Clear Filter") { providerFilter = nil } }
+                        } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
+                        .help("Filter by provider kind")
                     }
-                    
+                    .font(.caption)
+                }
+                .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4))
+                Section {
+                    ForEach(filteredConversations(), id: \.id) { convo in
+                        HStack(spacing: 6) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(convo.title.isEmpty ? "(untitled)" : convo.title.withoutEmoji())
+                                    .lineLimit(1)
+                                    .font(.headline)
+                                HStack(spacing: 4) {
+                                    providerBadge(for: convo.provider)
+                                    Text(convo.updatedAt, style: .time).font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            if runtime.selectedLocalConversationId == convo.id || (runtime.providerKind == .huggingFace && coordinator.selectedConversation == convo.id) {
+                                Image(systemName: "chevron.right.circle.fill").imageScale(.small).foregroundStyle(.accent)
+                            }
+                        }
+                        .padding(.leading, 4)
+                        .frame(height: 38)
+                        .contentShape(Rectangle())
+                        .background {
+                            if runtime.providerKind == .huggingFace {
+                                if coordinator.selectedConversation == convo.id {
+                                    RoundedRectangle(cornerRadius: 8).fill(.quinary)
+                                }
+                            } else if runtime.selectedLocalConversationId == convo.id {
+                                RoundedRectangle(cornerRadius: 8).fill(.quinary)
+                            }
+                        }
+                        .onTapGesture { selectConversation(convo) }
+                        .contextMenu { contextMenu(for: convo) }
+                        .listRowInsets(EdgeInsets(top: 0, leading: -4, bottom: 0, trailing: -4))
+                    }
                 } header: {
                     Text("Chats")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-//                        .padding(.horizontal, 10)
+                        .font(.subheadline).fontWeight(.semibold)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    
                 }
             }
             .listStyle(.sidebar)
@@ -146,7 +158,33 @@ struct SidebarView: View {
                 }, label: {
                     Image(systemName: "square.and.pencil")
                 })
+                if runtime.providerKind != .huggingFace {
+                    Button(action: { if !runtime.isStreaming { runtime.createLocalConversationIfNeeded(); } }) { Image(systemName: "plus") }
+                        .help(runtime.isStreaming ? "Finish streaming before starting a new chat" : "New Local Conversation")
+                        .disabled(runtime.isStreaming)
+                }
+                Button(action: {
+                    if runtime.providerKind == .huggingFace {
+                        runtime.mirrorHFConversations(force: true)
+                        coordinator.fetchConversations()
+                    } else {
+                        runtime.refreshLocalConversations()
+                    }
+                }, label: { Image(systemName: "arrow.clockwise") })
             }
+        }
+        .sheet(isPresented: $showingRenameSheet) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Rename Conversation").font(.headline)
+                TextField("Title", text: $renameDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { commitRename() }
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showingRenameSheet = false }
+                    Button("Save") { commitRename() }.disabled(renameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }.padding(24).frame(width: 360)
         }
         .confirmationDialog("Delete Chat", isPresented: $showingConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -160,19 +198,67 @@ struct SidebarView: View {
             Text("Are you sure you want to delete this conversation? This action cannot be undone.")
         }
     }
+    private func filteredConversations() -> [ChatConversation] {
+        let base = runtime.unifiedConversations()
+        let byProvider = providerFilter == nil ? base : base.filter { $0.provider == providerFilter }
+        if searchChat.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return byProvider }
+        let q = searchChat.lowercased()
+        return byProvider.filter { $0.title.lowercased().contains(q) || $0.modelId.lowercased().contains(q) }
+    }
     
-    private func handleChatSelection(for conversation: Conversation) {
-        if conversation.id != coordinator.selectedConversation {
-            let selectedConversation = coordinator.conversations.first(where: { $0.id == conversation.id })
-            if let allModels = coordinator.getLocalModels() {
-                let llmModel = allModels.first(where: { selectedConversation?.modelId == $0.id })!
-                coordinator.setActiveModel(LLMViewModel(model: llmModel))
-            } else {
-                // TODO: Model no longer available. Raise error.
+    private func selectConversation(_ convo: ChatConversation) {
+        if convo.provider == .huggingFace {
+            // Use legacy coordinator path for now
+            if coordinator.conversations.first(where: { $0.serverId == convo.remoteId }) == nil {
+                // Trigger a refresh of HF conversations if missing (legacy fetch already populates)
+                coordinator.fetchConversations()
             }
-            coordinator.selectedConversation = conversation.id
-            coordinator.loadConversationHistory()
+            if let match = coordinator.conversations.first(where: { $0.serverId == convo.remoteId }) {
+                coordinator.selectedConversation = match.id
+                coordinator.loadConversationHistory()
+            }
+        } else {
+            runtime.selectLocalConversation(convo)
         }
+    }
+    @ViewBuilder private func providerBadge(for kind: ProviderKind) -> some View {
+        switch kind {
+        case .huggingFace: badgeLabel("HF", color: .orange)
+        case .openAI: badgeLabel("OAI", color: .blue)
+        case .gemini: badgeLabel("G", color: .purple)
+        case .bedrock: badgeLabel("BR", color: .green)
+        case .local: badgeLabel("LOC", color: .gray)
+        }
+    }
+    private func badgeLabel(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.caption2).bold()
+            .padding(.horizontal, 4).padding(.vertical, 2)
+            .background(color.opacity(0.15))
+            .foregroundStyle(color)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+    @ViewBuilder private func contextMenu(for convo: ChatConversation) -> some View {
+        if convo.provider == .huggingFace {
+            if let remoteId = convo.remoteId {
+                Link(destination: URL(string: "\(baseURL)/chat/conversation/" + remoteId)!, label: { Label("Open in Browser", systemImage: "globe") })
+            }
+        } else {
+            Button { startRename(convo) } label: { Label("Rename", systemImage: "pencil") }
+            Button(role: .destructive) { runtime.deleteLocalConversation(id: convo.id) } label: { Label("Delete", systemImage: "trash") }
+        }
+    }
+    private func startRename(_ convo: ChatConversation) {
+        renamingConversation = convo
+        renameDraft = convo.title
+        showingRenameSheet = true
+    }
+    private func commitRename() {
+        guard let convo = renamingConversation else { return }
+        let newTitle = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !newTitle.isEmpty { runtime.renameLocalConversation(id: convo.id, newTitle: newTitle) }
+        showingRenameSheet = false
+        renamingConversation = nil
     }
 }
 
@@ -199,8 +285,4 @@ private struct LoadingAvatarView: View {
     }
 }
 
-#Preview {
-    ContentView()
-        .environmentObject(AppDelegate())
-        .environment(CoordinatorModel())
-}
+//#Preview { /* Preview disabled due to new environment dependencies */ }
