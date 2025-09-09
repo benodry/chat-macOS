@@ -13,9 +13,43 @@ public final class BedrockProvider: ChatProvider {
     private let session: URLSession
     private let decoder = JSONDecoder()
     private let capabilitiesValue = ProviderCapabilities(supportsTools: false, supportsReasoning: false, supportsStreaming: true, maxContextTokens: nil)
+    // Cache for model listing (simple, 5 min)
+    private var cachedModels: [ModelInfo]? = nil
+    private var lastFetch: Date? = nil
     public init(configuration: Configuration, session: URLSession = .shared) { self.config = configuration; self.session = session }
     public func capabilities() -> ProviderCapabilities { capabilitiesValue }
-    public func listModels() async throws -> [ModelInfo] { [ModelInfo(modelId: config.modelId, displayName: config.modelId, provider: kind, capabilities: capabilities())] }
+    public func listModels() async throws -> [ModelInfo] {
+        if let cached = cachedModels, let last = lastFetch, Date().timeIntervalSince(last) < 300 { return cached }
+        // Attempt gateway enumeration: GET /models -> [{"modelId":"anthropic.claude-3-haiku", "reasoning":false, "tools":false, "context":200000}]
+        var models: [ModelInfo] = []
+        do {
+            var req = URLRequest(url: config.endpoint.appendingPathComponent("models"))
+            req.httpMethod = "GET"
+            let (data, resp) = try await session.data(for: req)
+            if let http = resp as? HTTPURLResponse, 200..<300 ~= http.statusCode {
+                struct GatewayModel: Codable { let modelId: String; let reasoning: Bool?; let tools: Bool?; let context: Int? }
+                if let decoded = try? JSONDecoder().decode([GatewayModel].self, from: data) {
+                    models = decoded.map { gm in
+                        let caps = ProviderCapabilities(supportsTools: gm.tools ?? false, supportsReasoning: gm.reasoning ?? false, supportsStreaming: true, maxContextTokens: gm.context)
+                        return ModelInfo(modelId: gm.modelId, displayName: gm.modelId, provider: kind, capabilities: caps)
+                    }
+                }
+            }
+        } catch { /* fallback below */ }
+        if models.isEmpty {
+            // Static fallback popular Bedrock models (simplified)
+            let staticIds = ["anthropic.claude-3-haiku", "anthropic.claude-3-sonnet", "meta.llama3-70b-instruct", "meta.llama3-8b-instruct"]
+            models = staticIds.map { id in
+                let reasoning = id.contains("sonnet") // rough heuristic
+                let caps = ProviderCapabilities(supportsTools: false, supportsReasoning: reasoning, supportsStreaming: true, maxContextTokens: nil)
+                return ModelInfo(modelId: id, displayName: id, provider: kind, capabilities: caps)
+            }
+        }
+        models.sort { $0.displayName < $1.displayName }
+        cachedModels = models
+        lastFetch = Date()
+        return models
+    }
     struct DeltaObj: Codable { let delta: String?; let completed: Bool? }
     static func parseDelta(line: String, decoder: JSONDecoder) -> DeltaObj? {
         guard let data = line.data(using: .utf8) else { return nil }

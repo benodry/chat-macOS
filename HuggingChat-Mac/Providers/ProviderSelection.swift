@@ -31,6 +31,11 @@ import Combine
     var streamingAssistantContent: String = ""
     var isStreaming: Bool = false
     private var cancellables = Set<AnyCancellable>()
+    // Dynamic model listings cache per provider kind
+    var availableModels: [ModelInfo] = []
+    var isLoadingModels: Bool = false
+    var modelLoadError: String?
+    // Keep separate caches per provider kind if needed (currently reused single list)
     
     func configureInitial() {
         if store == nil {
@@ -65,6 +70,7 @@ import Combine
             let provider = GeminiProvider(configuration: .init(apiKey: key, model: model))
             engine = ChatEngine(provider: provider, store: store)
             cancelHFRefreshTimer()
+            Task { await loadModelsIfNeeded(force: false) }
         case .bedrock:
             let endpointStr = UserDefaults.standard.string(forKey: "bedrock_gateway") ?? "https://bedrock-gateway.local"
             let model = UserDefaults.standard.string(forKey: "bedrock_model") ?? "anthropic.claude-3-haiku"
@@ -72,6 +78,7 @@ import Combine
             let provider = BedrockProvider(configuration: .init(modelId: model, endpoint: endpoint))
             engine = ChatEngine(provider: provider, store: store)
             cancelHFRefreshTimer()
+            Task { await loadModelsIfNeeded(force: false) }
         default:
             // Future providers
             engine = nil
@@ -191,6 +198,35 @@ import Combine
         for convo in imported { try? store.create(convo) }
         refreshLocalConversations()
     }
+    @MainActor
+    func loadModelsIfNeeded(force: Bool) async {
+    guard (providerKind == .gemini || providerKind == .bedrock), let engine else { return }
+        if !force, !availableModels.isEmpty { return }
+        isLoadingModels = true; modelLoadError = nil
+        defer { isLoadingModels = false }
+        do {
+            let models = try await engineListModels()
+            availableModels = models
+            if providerKind == .gemini {
+                if let saved = UserDefaults.standard.string(forKey: "gemini_model"), models.contains(where: { $0.modelId == saved }) {
+                } else if let first = models.first { UserDefaults.standard.set(first.modelId, forKey: "gemini_model") }
+            } else if providerKind == .bedrock {
+                if let saved = UserDefaults.standard.string(forKey: "bedrock_model"), models.contains(where: { $0.modelId == saved }) {
+                } else if let first = models.first { UserDefaults.standard.set(first.modelId, forKey: "bedrock_model") }
+            }
+        } catch {
+            modelLoadError = String(describing: error)
+        }
+    }
+    /// Thin pass-through until we potentially add multi-provider engine store
+    func engineListModels() async throws -> [ModelInfo] {
+        try await (engine?.providerListModels() ?? [])
+    }
+}
+
+extension ChatEngine {
+    // Internal helper to expose provider listing while keeping provider private in engine API surface.
+    fileprivate func providerListModels() async throws -> [ModelInfo] { try await provider.listModels() }
 }
 
 struct ProviderPickerView: View {
@@ -239,22 +275,69 @@ struct ProviderPickerView: View {
                     }.frame(maxHeight: 140)
                 }
             } else if runtime.providerKind == .gemini {
-                Text("Gemini API Key stored in Keychain / UserDefaults (placeholder)").font(.caption)
-                TextField("Gemini Model (e.g. gemini-1.5-flash)", text: Binding(
-                    get: { UserDefaults.standard.string(forKey: "gemini_model") ?? "gemini-1.5-flash" },
-                    set: { UserDefaults.standard.set($0, forKey: "gemini_model") }))
                 SecureField("API Key", text: Binding(
                     get: { UserDefaults.standard.string(forKey: "gemini_api_key") ?? "" },
                     set: { UserDefaults.standard.set($0, forKey: "gemini_api_key") }))
-                Button("Save & Rebuild") { runtime.rebuildProvider(); runtime.refreshLocalConversations() }
+                if runtime.isLoadingModels {
+                    ProgressView().controlSize(.small)
+                } else if let err = runtime.modelLoadError {
+                    Text("Model load failed: \(err)").foregroundStyle(.red).font(.caption)
+                } else if !runtime.availableModels.isEmpty {
+                    Picker("Model", selection: Binding(
+                        get: { UserDefaults.standard.string(forKey: "gemini_model") ?? runtime.availableModels.first!.modelId },
+                        set: { newVal in
+                            UserDefaults.standard.set(newVal, forKey: "gemini_model")
+                            runtime.rebuildProvider(); runtime.refreshLocalConversations()
+                        })) {
+                        ForEach(runtime.availableModels) { model in
+                            HStack {
+                                Text(model.displayName)
+                                if model.capabilities.supportsReasoning { Text("R").font(.caption2).foregroundStyle(.blue) }
+                                if model.capabilities.supportsStreaming { Text("S").font(.caption2).foregroundStyle(.green) }
+                            }.tag(model.modelId)
+                        }
+                    }
+                } else {
+                    TextField("Model (fallback)", text: Binding(
+                        get: { UserDefaults.standard.string(forKey: "gemini_model") ?? "gemini-1.5-flash" },
+                        set: { UserDefaults.standard.set($0, forKey: "gemini_model") }))
+                }
+                HStack {
+                    Button("Refresh Models") { Task { await runtime.loadModelsIfNeeded(force: true) } }.disabled((UserDefaults.standard.string(forKey: "gemini_api_key") ?? "").isEmpty)
+                    Button("Save & Rebuild") { runtime.rebuildProvider(); runtime.refreshLocalConversations() }
+                }
             } else if runtime.providerKind == .bedrock {
                 TextField("Gateway Endpoint", text: Binding(
                     get: { UserDefaults.standard.string(forKey: "bedrock_gateway") ?? "https://bedrock-gateway.local" },
                     set: { UserDefaults.standard.set($0, forKey: "bedrock_gateway") }))
-                TextField("Model Id", text: Binding(
-                    get: { UserDefaults.standard.string(forKey: "bedrock_model") ?? "anthropic.claude-3-haiku" },
-                    set: { UserDefaults.standard.set($0, forKey: "bedrock_model") }))
-                Button("Save & Rebuild") { runtime.rebuildProvider(); runtime.refreshLocalConversations() }
+                if runtime.isLoadingModels {
+                    ProgressView().controlSize(.small)
+                } else if let err = runtime.modelLoadError {
+                    Text("Model load failed: \(err)").foregroundStyle(.red).font(.caption)
+                } else if !runtime.availableModels.isEmpty {
+                    Picker("Model", selection: Binding(
+                        get: { UserDefaults.standard.string(forKey: "bedrock_model") ?? runtime.availableModels.first!.modelId },
+                        set: { newVal in
+                            UserDefaults.standard.set(newVal, forKey: "bedrock_model")
+                            runtime.rebuildProvider(); runtime.refreshLocalConversations()
+                        })) {
+                        ForEach(runtime.availableModels) { model in
+                            HStack {
+                                Text(model.displayName)
+                                if model.capabilities.supportsReasoning { Text("R").font(.caption2).foregroundStyle(.blue) }
+                                if model.capabilities.supportsStreaming { Text("S").font(.caption2).foregroundStyle(.green) }
+                            }.tag(model.modelId)
+                        }
+                    }
+                } else {
+                    TextField("Model (fallback)", text: Binding(
+                        get: { UserDefaults.standard.string(forKey: "bedrock_model") ?? "anthropic.claude-3-haiku" },
+                        set: { UserDefaults.standard.set($0, forKey: "bedrock_model") }))
+                }
+                HStack {
+                    Button("Refresh Models") { Task { await runtime.loadModelsIfNeeded(force: true) } }
+                    Button("Save & Rebuild") { runtime.rebuildProvider(); runtime.refreshLocalConversations() }
+                }
             }
         }
         .padding()
